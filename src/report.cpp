@@ -62,7 +62,7 @@ std::string report_jemalloc_plain(const char *opts, const std::string path) {
     if (dump_jemalloc(filename.c_str(), opts) != 0) {
         // return an empty string if something went bananas
         unlink(filename.c_str());
-        return std::string("");
+        return std::string();
     }
 
     // slurp the contents into a string

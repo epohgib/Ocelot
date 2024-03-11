@@ -8,20 +8,20 @@
 
 class confval {
  private:
-    bool bool_val;
-    uint32_t uint_val;
+    bool bool_val = false;
+    uint32_t uint_val = 0;
     std::string str_val;
     enum {
         CONF_NONEXISTENT,
         CONF_BOOL,
         CONF_UINT,
         CONF_STR,
-    } val_type;
+    } val_type = CONF_NONEXISTENT;
  public:
-    confval();
+    confval() = default;
     confval(bool value);
     confval(uint32_t value);
-    confval(const char * value);
+    confval(const char *value);
     uint32_t get_uint();
     bool get_bool();
     std::string get_str();
@@ -35,7 +35,7 @@ class config {
     void init();
     confval * get(const std::string &setting_name);
     std::map<std::string, confval> settings;
-    confval * dummy_setting;
+    confval dummy_setting; // Safety value to use if we're accessing nonexistent settings
  public:
     config();
     void load(std::istream &conf_file);

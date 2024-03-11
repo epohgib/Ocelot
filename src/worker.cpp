@@ -1,6 +1,7 @@
 // Copyright [2017-2024] Orpheus
 
 #include <spdlog/spdlog.h>
+#include <fmt/format.h>
 
 #include <iostream>
 #include <string>
@@ -545,7 +546,7 @@ std::string worker::announce(const std::string &input, torrent &tor, user_ptr &u
     if (inserted || port != p->port || ip != p->ip) {
         p->port = port;
         p->ip = ip;
-        p->ip_port = "";
+		p->ip_port.clear();
         char x = 0;
         for (size_t pos = 0, end = ip.length(); pos < end; pos++) {
             if (ip[pos] == '.') {
@@ -618,7 +619,7 @@ std::string worker::announce(const std::string &input, torrent &tor, user_ptr &u
         std::stringstream record;
         std::string record_ip;
         if (u->is_protected()) {
-            record_ip = "";
+			record_ip.clear();
         } else {
             record_ip = ip;
         }
@@ -847,11 +848,11 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
         auto u = users_list.find(oldpasskey);
         if (u == users_list.end()) {
-            logger->warn("No user with passkey " + oldpasskey + " exists when attempting to change passkey to " + newpasskey);
+			logger->warn("No user with passkey {} exists when attempting to change passkey to {}", oldpasskey, newpasskey);
         } else {
             users_list[newpasskey] = u->second;
             users_list.erase(oldpasskey);
-            logger->info("Changed passkey from " + oldpasskey + " to " + newpasskey + " for user " + std::to_string(u->second->get_id()));
+			logger->info("Changed passkey from {} to {} for user {}", oldpasskey, newpasskey, u->second->get_id());
         }
     } else if (action == "add_torrent") {
         torrent *t;
@@ -864,7 +865,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             t->id = static_cast<torid_t>(strtoint32(params["id"]));
             t->balance = 0;
             t->completed = 0;
-            t->last_selected_seeder = "";
+			t->last_selected_seeder.clear();
         } else {
             t = &i->second;
         }
@@ -875,7 +876,9 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         } else {
             t->free_torrent = NEUTRAL;
         }
-        logger->info("Added torrent " + std::to_string(t->id) + ". FL: " + std::to_string(t->free_torrent) + " " + params["freetorrent"]);
+        logger->info("Added torrent {}. FL: {} {}",
+            t->id, t->free_torrent, params["freetorrent"]
+        );
     } else if (action == "update_torrent") {
         std::string info_hash = params["info_hash"];
         info_hash = hex_decode(info_hash);
@@ -891,9 +894,9 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         auto torrent_it = torrents_list.find(info_hash);
         if (torrent_it != torrents_list.end()) {
             torrent_it->second.free_torrent = fl;
-            logger->info("Updated torrent " + std::to_string(torrent_it->second.id) + " to FL " + std::to_string(fl));
+			logger->info("Updated torrent {} to FL {}", torrent_it->second.id, fl);
         } else {
-            logger->warn("Failed to find torrent " + std::string(info_hash) + " to FL " + std::to_string(fl));
+			logger->warn("Failed to find torrent {} to FL {}", info_hash, fl);
         }
     } else if (action == "update_torrents") {
         // Each decoded infohash is exactly 20 characters long.
@@ -913,9 +916,9 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             auto torrent_it = torrents_list.find(info_hash);
             if (torrent_it != torrents_list.end()) {
                 torrent_it->second.free_torrent = fl;
-                logger->info("Updated torrent " + std::to_string(torrent_it->second.id) + " to FL " + std::to_string(fl));
+				logger->info("Updated torrent {} to FL {}", torrent_it->second.id, fl);
             } else {
-                logger->warn("Failed to find torrent " + info_hash + " to FL " + std::to_string(fl));
+				logger->warn("Failed to find torrent {} to FL {}", info_hash, fl);
             }
         }
     } else if (action == "add_token") {
@@ -926,7 +929,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         if (torrent_it != torrents_list.end()) {
             torrent_it->second.tokened_users.insert(userid);
         } else {
-            logger->warn("Failed to find torrent to add a token for user " + std::to_string(userid));
+			logger->warn("Failed to find torrent to add a token for user {}", userid);
         }
     } else if (action == "remove_token") {
         std::string info_hash = hex_decode(params["info_hash"]);
@@ -936,7 +939,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         if (torrent_it != torrents_list.end()) {
             torrent_it->second.tokened_users.erase(userid);
         } else {
-            logger->warn("Failed to find torrent " + info_hash + " to remove token for user " + std::to_string(userid));
+			logger->warn("Failed to find torrent {} to remove token for user {}", info_hash, userid);
         }
     } else if (action == "delete_torrent") {
         std::string info_hash = params["info_hash"];
@@ -949,7 +952,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         std::lock_guard<std::mutex> tl_lock(db->torrent_list_mutex);
         auto torrent_it = torrents_list.find(info_hash);
         if (torrent_it != torrents_list.end()) {
-            logger->info("Deleting torrent " + std::to_string(torrent_it->second.id) + " for the reason '" + get_del_reason(reason) + "'");
+			logger->info("Deleting torrent {} for the reason '{}'", torrent_it->second.id, get_del_reason(reason));
             stats.leechers -= torrent_it->second.leechers.size();
             stats.seeders -= torrent_it->second.seeders.size();
             for (auto &p : torrent_it->second.leechers) {
@@ -965,7 +968,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             del_reasons[info_hash] = msg;
             torrents_list.erase(torrent_it);
         } else {
-            logger->warn("Failed to find torrent " + bintohex(info_hash) + " to delete ");
+			logger->warn("Failed to find torrent {} to delete", spdlog::to_hex(info_hash));
         }
     } else if (action == "add_user") {
         std::string passkey = params["passkey"];
@@ -976,9 +979,9 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             bool protect_ip = params["visible"] == "0";
             user_ptr tmp_user = std::make_shared<user>(userid, true, protect_ip);
             users_list.insert(std::pair<std::string, user_ptr>(passkey, tmp_user));
-            logger->info("Added user " + passkey + " with id " + std::to_string(userid));
+			logger->info("Added user {} with id {}", passkey, userid);
         } else {
-            logger->warn("Tried to add already known user " + passkey + " with id " + std::to_string(userid));
+			logger->warn("Tried to add already known user {} with id {}", passkey, userid);
             u->second->set_deleted(false);
         }
     } else if (action == "remove_user") {
@@ -986,7 +989,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
         auto u = users_list.find(passkey);
         if (u != users_list.end()) {
-            logger->info("Removed user " + passkey + " with id " + std::to_string(u->second->get_id()));
+			logger->info("Removed user {} with id {}", passkey, u->second->get_id());
             u->second->set_deleted(true);
             users_list.erase(u);
         }
@@ -998,7 +1001,7 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             std::string passkey = passkeys.substr(pos, 32);
             auto u = users_list.find(passkey);
             if (u != users_list.end()) {
-                logger->info("Removed user " + passkey);
+				logger->info("Removed user {}", passkey);
                 u->second->set_deleted(true);
                 users_list.erase(passkey);
             }
@@ -1016,17 +1019,17 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
         user_list::iterator i = users_list.find(passkey);
         if (i == users_list.end()) {
-            logger->warn("No user with passkey " + passkey + " found when attempting to change leeching status!");
+            logger->warn("No user with passkey {} found when attempting to change leeching status!", passkey);
         } else {
             i->second->set_protected(protect_ip);
             i->second->set_leechstatus(can_leech);
-            logger->info("Updated user " + passkey);
+            logger->info("Updated user {}", passkey);
         }
     } else if (action == "add_whitelist") {
         std::string peer_id = params["peer_id"];
         std::lock_guard<std::mutex> wl_lock(db->whitelist_mutex);
         whitelist.push_back(peer_id);
-        logger->info("Whitelisted " + peer_id);
+        logger->info("Whitelisted {}", peer_id);
     } else if (action == "remove_whitelist") {
         std::string peer_id = params["peer_id"];
         std::lock_guard<std::mutex> wl_lock(db->whitelist_mutex);
@@ -1048,19 +1051,19 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             }
         }
         whitelist.push_back(new_peer_id);
-        logger->info("Edited whitelist item from " + old_peer_id + " to " + new_peer_id);
+        logger->info("Edited whitelist item from {} to {}", old_peer_id, new_peer_id);
     } else if (action == "update_announce_interval") {
         const std::string interval = params["new_announce_interval"];
         conf->set("announce_interval", interval);
         announce_interval = conf->get_uint("announce_interval");
-        logger->info("Edited announce interval to " + std::to_string(announce_interval));
+        logger->info("Edited announce interval to {}", announce_interval);
     } else if (action == "update_announce_jitter") {
         const std::string new_jitter = params["new_announce_jitter"];
         conf->set("announce_jitter", new_jitter);
         jitter = std::uniform_int_distribution<int>(0, conf->get_uint("announce_jitter"));
-        logger->info("Edited announce jitter to " + std::to_string(conf->get_uint("announce_jitter")));
+        logger->info("Edited announce jitter to {}", conf->get_uint("announce_jitter"));
     } else if (action == "info_torrent") {
-        std::stringstream output;
+        std::ostringstream output;
         std::string info_hash_hex = params["info_hash"];
         std::string info_hash = hex_decode(info_hash_hex);
         std::lock_guard<std::mutex> tl_lock(db->torrent_list_mutex);
@@ -1144,8 +1147,9 @@ void worker::reap_peers() {
         stats.leechers -= reaped_l;
         stats.seeders -= reaped_s;
     }
-    logger->info("Reaped " + std::to_string(reaped_l) + " leechers and " + std::to_string(reaped_s)
-                 + " seeders. Reset " + std::to_string(cleared_torrents) + " torrents");
+	logger->info("Reaped {} leechers and {} seeders. Reset {} torrents",
+        reaped_l, reaped_s, cleared_torrents
+    );
 }
 
 void worker::reap_del_reasons() {
@@ -1163,7 +1167,7 @@ void worker::reap_del_reasons() {
         }
         ++it;
     }
-    logger->info("Reaped " + std::to_string(reaped) + " del reasons");
+	logger->info("Reaped {} del reasons", reaped);
 }
 
 std::string worker::get_del_reason(int code) {
@@ -1238,7 +1242,7 @@ std::string worker::get_del_reason(int code) {
             return "Audience Recording";
             break;
         default:
-            return "";
+			return std::string();
             break;
     }
 }
