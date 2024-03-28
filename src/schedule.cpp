@@ -34,9 +34,10 @@ void schedule::handle(ev::timer &watcher, int events_flags) {
     stats.connection_rate = (stats.opened_connections - last_opened_connections) / cur_schedule_interval;
     stats.request_rate = (stats.requests - last_request_count) / cur_schedule_interval;
     if (counter % 20 == 0) {
-		logger->info("{} open, {} connections ({}/s), {} requests ({}/s)",
-					 stats.open_connections, stats.opened_connections, stats.connection_rate,
-					 stats.requests, stats.request_rate);
+        logger->info("{} open, {} connections ({}/s), {} requests ({}/s)",
+            stats.open_connections, stats.opened_connections, stats.connection_rate,
+            stats.requests, stats.request_rate
+        );
     }
 
     if (work->get_status() == CLOSING && db->all_clear() && sc->all_clear()) {

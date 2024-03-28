@@ -6,29 +6,6 @@
 
 #include "misc_functions.h"
 
-int32_t strtoint32(const std::string& str) {
-    std::istringstream stream(str);
-    int32_t i = 0;
-    stream >> i;
-    return i;
-}
-
-int64_t strtoint64(const std::string& str) {
-    std::istringstream stream(str);
-    int64_t i = 0;
-    stream >> i;
-    return i;
-}
-
-
-std::string inttostr(const int i) {
-    std::string str;
-    std::stringstream out;
-    out << i;
-    str = out.str();
-    return str;
-}
-
 std::string hex_decode(const std::string &in) {
     std::string out;
     out.reserve(20);

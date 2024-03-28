@@ -65,7 +65,7 @@ void site_comm::flush_tokens()
     std::lock_guard<std::mutex> lock(expire_queue_lock);
     size_t qsize = token_queue.size();
     if (verbose_flush || qsize > 0) {
-		logger->info("Token expire queue size: {}", qsize);
+        logger->info("Token expire queue size: {}", qsize);
     }
     if (expire_token_buffer.empty()) {
         return;

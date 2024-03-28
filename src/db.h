@@ -21,7 +21,10 @@ class mysql {
         std::string buf;
         const mysql &db;
       public:
-        query_buffer(const mysql& db_):db(db_) {}
+        /* pre-extend the buffer to avoid repeated reallocs,
+         * the peer queue can easily reach 500Kb
+         */
+        query_buffer(const mysql& db_):db(db_) { buf.reserve(57320); }
         query_buffer& operator+=(const std::string& chars) {
             if (!db.readonly) {
                 if (!buf.empty()) {
@@ -31,19 +34,26 @@ class mysql {
             }
             return *this;
         }
-        void clear() { buf.clear(); }
+        void clear() { buf.clear(); buf.reserve(57320); }
         bool empty() const { return buf.empty(); }
         const std::string& str() const { return buf; }
     };
     friend class query_buffer;
 
     mysqlpp::Connection conn;
-    query_buffer update_user_buffer;
-    query_buffer update_torrent_buffer;
     query_buffer update_heavy_peer_buffer;
     query_buffer update_light_peer_buffer;
     query_buffer update_snatch_buffer;
     query_buffer update_token_buffer;
+    query_buffer update_torrent_buffer;
+    query_buffer update_user_buffer;
+
+    std::mutex peer_buffer_lock;
+    std::mutex peer_light_buffer_lock;
+    std::mutex snatch_buffer_lock;
+    std::mutex token_buffer_lock;
+    std::mutex torrent_buffer_lock;
+    std::mutex user_buffer_lock;
 
     std::queue<std::string> user_queue;
     std::queue<std::string> torrent_queue;
@@ -51,19 +61,16 @@ class mysql {
     std::queue<std::string> snatch_queue;
     std::queue<std::string> token_queue;
 
-    std::string mysql_db, mysql_host, mysql_username, mysql_password;
-    unsigned int mysql_port;
-    bool u_active, t_active, p_active, s_active, tok_active;
-    bool readonly;
-
-    // These locks prevent more than one thread from reading/writing the buffers.
-    // These should be held for the minimum time possible.
-    std::mutex user_queue_lock;
-    std::mutex torrent_buffer_lock;
-    std::mutex torrent_queue_lock;
     std::mutex peer_queue_lock;
     std::mutex snatch_queue_lock;
     std::mutex token_queue_lock;
+    std::mutex torrent_queue_lock;
+    std::mutex user_queue_lock;
+
+    std::string mysql_db, mysql_host, mysql_username, mysql_password;
+    unsigned int mysql_port;
+    bool peer_flush_active, snatch_flush_active, token_flush_active, torrent_flush_active, user_flush_active;
+    bool readonly;
 
     std::shared_ptr<spdlog::logger> logger;
 
@@ -83,6 +90,10 @@ class mysql {
  public:
     bool verbose_flush;
 
+    std::mutex torrent_list_mutex;
+    std::mutex user_list_mutex;
+    std::mutex whitelist_mutex;
+
     mysql(config * conf);
     void reload_config(config * conf);
     void flush();
@@ -91,27 +102,25 @@ class mysql {
     void load_torrents(torrent_list &torrents);
     void load_users(user_list &users);
     void load_whitelist(std::vector<std::string> &whitelist);
+    std::string quote(std::string value);
 
-    // (id,uploaded_change,downloaded_change)
-    void record_user(const std::string &record);
+    // (uid,fid,active,peerid,useragent,ip,uploaded,downloaded,upspeed,downspeed,left,timespent,announces,tstamp)
+    void record_peer(const std::string &record);
+
+    // (fid,peerid,timespent,announces,tstamp)
+    void record_peer_light(const std::string &record);
+
+    // (uid,fid,tstamp)
+    void record_snatch(const std::string &record);
+
+    // (uid,fid,downloaded_change)
+    void record_token(const std::string &record);
 
     // (id,seeders,leechers,snatched_change,balance)
     void record_torrent(const std::string &record);
 
-    // (uid,fid,tstamp)
-    void record_snatch(const std::string &record, const std::string &ip);
-
-    // (uid,fid,active,peerid,useragent,ip,uploaded,downloaded,upspeed,downspeed,left,timespent,announces,tstamp)
-    void record_peer(const std::string &record, const std::string &ip, const std::string &peer_id, const std::string &useragent);
-
-    // (fid,peerid,timespent,announces,tstamp)
-    void record_peer(const std::string &record, const std::string &peer_id);
-
-    void record_token(const std::string &record);
-
-    std::mutex torrent_list_mutex;
-    std::mutex user_list_mutex;
-    std::mutex whitelist_mutex;
+    // (id,uploaded_change,downloaded_change)
+    void record_user(const std::string &record);
 };
 
 #pragma GCC visibility pop

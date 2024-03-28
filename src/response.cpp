@@ -1,5 +1,7 @@
 // Copyright [2017-2024] Orpheus
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <sstream>
 
@@ -14,9 +16,12 @@ const std::string http_head(size_t content_length, client_opts_t &client_opts) {
     const std::string content_type = client_opts.html ? "text/html" : "text/plain";
 
     // rely on preprocessor string concatenation
-    std::string head = "HTTP/1.1 200 OK\r\nServer: Ocelot " OCELOT_VERSION "\r\n"
-        "Content-Type: " + content_type + "\r\n"
-        "Content-Length: " + inttostr(content_length) + "\r\n";
+    std::string head(fmt::format(
+        "HTTP/1.1 200 OK\r\nServer: Ocelot " OCELOT_VERSION "\r\n"
+        "Content-Type: {}\r\n"
+        "Content-Length: {}\r\n",
+        content_type, content_length
+    ));
     if (client_opts.gzip) {
         head += "Content-Encoding: gzip\r\n";
     }
@@ -51,8 +56,10 @@ const std::string http_response(const std::string &body, client_opts_t &client_o
 
 const std::string error(const std::string &message, client_opts_t &client_opts) {
     return http_response(
-        "d14:failure reason" + inttostr(message.length()) + ':' + message
-            + "12:min intervali5400e8:intervali5400ee",
+        fmt::format(
+            "d14:failure reason{}:{}12:min intervali5400e8:intervali5400ee",
+            message.length(), message
+        ),
         client_opts
     );
 }

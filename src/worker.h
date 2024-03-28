@@ -39,7 +39,7 @@ class worker {
     unsigned int announce_interval;
     unsigned int del_reason_lifetime;
     unsigned int peers_timeout;
-    unsigned int numwant_limit;
+    int numwant_limit;
     bool keepalive_enabled;
     std::string site_password;
     std::string report_password;

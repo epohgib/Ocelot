@@ -5,9 +5,9 @@
 
 #define OCELOT_VERSION_MAJOR 2
 #define OCELOT_VERSION_MINOR 1
-#define OCELOT_VERSION_BUGFIX 3
+#define OCELOT_VERSION_BUGFIX 4
 #define OCELOT_VERSION_NREV 0
-#define OCELOT_VERSION "2.1.3"
+#define OCELOT_VERSION "2.1.4"
 
 #include <time.h>
 

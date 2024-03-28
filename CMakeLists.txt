@@ -49,6 +49,9 @@ find_package(MYSQLPP REQUIRED)
 find_package(LibEv REQUIRED)
 include_directories(${LIBEV_INCLUDE_DIR})
 
+find_package(fmt REQUIRED)
+message(STATUS "Found libfmt version ${fmt_VERSION}")
+
 include_directories(${CMAKE_SOURCE_DIR}/libs)
 
 file(GLOB HEADERS src/*.h)
@@ -60,6 +63,7 @@ SET(LINK_LIBRARIES
     ${Boost_SYSTEM_LIBRARY}
     ${Boost_IOSTREAMS_LIBRARY}
     ${LIBEV_LIBRARY}
+    ${LIBFMT_IBRARY}
     ${MYSQLPP_LIBRARY}
     Threads::Threads
 )
@@ -75,4 +79,5 @@ endif()
 target_link_libraries(
     ocelot
     ${LINK_LIBRARIES}
+    fmt::fmt
 )

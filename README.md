@@ -8,6 +8,7 @@ It supports requests over TCP and can only track IPv4 peers.
 * [GCC/G++](http://gcc.gnu.org/) (11+ required; 11.4.0+ recommended)
 * [Boost](http://www.boost.org/) (1.74.0+ required)
 * [libev](http://software.schmorp.de/pkg/libev.html) (required)
+* [libfmt](https://github.com/fmtlib/fmt) (8.1+ required)
 * [MySQL++](http://tangentsoft.net/mysql++/) (3.2.0+ required)
 * [jemalloc](http://jemalloc.net/) (optional, but strongly recommended)
 * [TCMalloc](http://goog-perftools.sourceforge.net/doc/tcmalloc.html) (optional)
@@ -23,9 +24,10 @@ sudo apt-get install \
     libboost-iostreams-dev \
     libboost-system-dev \
     libev-dev \
+    libfmt-dev \
     libjemalloc-dev \
     libmysql++-dev \
-	netcat-traditional \
+    netcat-traditional \
     pkg-config
 cmake -Wno-dev . -B build 
 make -C build
@@ -42,7 +44,7 @@ docker run -v $(pwd)/ocelot.conf:/srv/ocelot.conf ocelot
 
 ### Standalone Installation
 
-* Prepare the build environment. (This must be re-executed when new source files are added).
+* Prepare the build environment. (This must be re-executed when new source files or libraries are added).
 
         cmake -Wno-dev . -B build
 

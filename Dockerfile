@@ -10,6 +10,7 @@ RUN apt-get update \
         libboost-iostreams-dev \
         libboost-system-dev \
         libev-dev \
+        libfmt-dev \
         libjemalloc-dev \
         libmysql++-dev \
         netcat-traditional \
