@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -100,6 +100,12 @@ std::string report(const uint32_t announce_interval, const uint32_t announce_jit
         << ITEM_NUM("scrapes", stats.scrapes) << ','
         << ITEM_NUM("leechers tracked", stats.leechers) << ','
         << ITEM_NUM("seeders tracked", stats.seeders) << ','
+        << ITEM_NUM("announce duration", stats.announce_duration) << ','
+        << ITEM_NUM("torrent lock total", stats.torrent_lock_total) << ','
+        << ITEM_NUM("torrent lock duration", stats.torrent_lock_duration) << ','
+        << ITEM_NUM("reap lock total", stats.reap_total) << ','
+        << ITEM_NUM("reap lock duration", stats.reap_lock_duration) << ','
+        << ITEM_NUM("reap duration", stats.reap_duration) << ','
         << ITEM_NUM("items in user queue", stats.user_queue_size) << ','
         << ITEM_NUM("items in torrent queue", stats.torrent_queue_size) << ','
         << ITEM_NUM("items in peer queue", stats.peer_queue_size) << ','
@@ -173,13 +179,21 @@ std::string report_prom_stats(const char *jemalloc) {
         "#TYPE ocelot_max_client_request_len counter\n"
         "ocelot_max_client_request_len " << stats.max_client_request_len << "\n"
 
-        "#TYPE ocelot_error counter counter\n"
+        "#TYPE ocelot_error counter\n"
         "ocelot_error{kind=\"secret\"} "         << stats.auth_error_secret << "\n"
         "ocelot_error{kind=\"report\"} "         << stats.auth_error_report << "\n"
         "ocelot_error{kind=\"announce\"} "       << stats.auth_error_announce_key << "\n"
         "ocelot_error{kind=\"client\"} "         << stats.client_error << "\n"
         "ocelot_error{kind=\"http\"} "           << stats.http_error << "\n"
         "ocelot_error{kind=\"jemalloc_parse\"} " << result << "\n"
+
+        "#TYPE ocelot_timing counter\n"
+        "ocelot_timing{kind=\"announce_duration\"} "     << stats.announce_duration << "\n"
+        "ocelot_timing{kind=\"torrent_lock_total\"} "    << stats.torrent_lock_total << "\n"
+        "ocelot_timing{kind=\"torrent_lock_duration\"} " << stats.torrent_lock_duration << "\n"
+        "ocelot_timing{kind=\"reap_total\"} "            << stats.reap_total << "\n"
+        "ocelot_timing{kind=\"reap_lock_duration\"} "    << stats.reap_lock_duration << "\n"
+        "ocelot_timing{kind=\"reap_duration\"} "         << stats.reap_duration << "\n"
 
         "#TYPE jemalloc_arena_total counter\n"
         "jemalloc_arena_total " << ji.nr_arena << "\n"

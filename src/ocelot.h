@@ -1,13 +1,13 @@
 #ifndef SRC_OCELOT_H_
 #define SRC_OCELOT_H_
 
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #define OCELOT_VERSION_MAJOR 2
 #define OCELOT_VERSION_MINOR 1
-#define OCELOT_VERSION_BUGFIX 3
+#define OCELOT_VERSION_BUGFIX 5
 #define OCELOT_VERSION_NREV 0
-#define OCELOT_VERSION "2.1.3"
+#define OCELOT_VERSION "2.1.5"
 
 #include <time.h>
 
@@ -116,6 +116,12 @@ struct stats_t {
     std::atomic<uint64_t> announcements;
     std::atomic<uint64_t> succ_announcements;
     std::atomic<uint64_t> scrapes;
+    std::atomic<uint64_t> announce_duration; // all durations measure microseconds
+    std::atomic<uint64_t> torrent_lock_total;
+    std::atomic<uint64_t> torrent_lock_duration;
+    std::atomic<uint64_t> reap_total;
+    std::atomic<uint64_t> reap_lock_duration;
+    std::atomic<uint64_t> reap_duration;
     std::atomic<uint64_t> bytes_read;
     std::atomic<uint64_t> bytes_written;
     std::atomic<uint64_t> auth_error_secret;

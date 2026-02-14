@@ -27,9 +27,10 @@ RUN cmake -Wno-dev -S /srv -B /srv/build \
         pkg-config \
     && apt-get autoremove -y \
     && apt-get clean -y \
-    && mkdir -p /tmp/ocelot \
     && mv /srv/build/ocelot /srv/ocelot \
-    && mv /srv/ocelot.conf.dist /srv/ocelot.conf
+    && mv /srv/ocelot.conf.dist /srv/ocelot.conf \
+    && rm -rf /srv/build \
+    && mkdir -p /tmp/ocelot
 
 # default listen_port value in ocelot.conf
 EXPOSE 34000

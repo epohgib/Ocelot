@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <sys/stat.h>
 #include <syslog.h>
@@ -183,6 +183,12 @@ int main(int argc, char **argv) {
     stats.announcements = 0;
     stats.succ_announcements = 0;
     stats.scrapes = 0;
+    stats.announce_duration = 0;
+    stats.torrent_lock_total = 0;
+    stats.torrent_lock_duration = 0;
+    stats.reap_total = 0;
+    stats.reap_lock_duration = 0;
+    stats.reap_duration = 0;
     stats.bytes_read = 0;
     stats.bytes_written = 0;
     stats.auth_error_secret = 0;
@@ -199,7 +205,7 @@ int main(int argc, char **argv) {
     sched = new schedule(conf, work, db, sc);
 
     // Create connection mother, which binds to its socket and handles the event stuff
-    mother = new connection_mother(conf, work, db, sc, sched);
+    mother = new connection_mother(conf, work, sc, sched);
 
     // Add signal handlers now that all objects have been created
     struct sigaction handler{}, ignore{};
