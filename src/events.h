@@ -1,7 +1,7 @@
 #ifndef SRC_EVENTS_H_
 #define SRC_EVENTS_H_
 
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #ifdef EV_ERROR
 #undef EV_ERROR
@@ -29,7 +29,6 @@
 #include "config.h"
 #include "worker.h"
 #include "schedule.h"
-#include "db.h"
 #include "site_comm.h"
 
 /*
@@ -58,13 +57,12 @@ class connection_mother {
 
     int listen_socket;
     worker * work;
-    mysql * db;
     ev::io listen_event;
     ev::timer schedule_event;
     std::shared_ptr<spdlog::logger> logger;
 
  public:
-    connection_mother(config * conf, worker * worker_obj, mysql * db_obj, site_comm * sc_obj, schedule * sched_obj);
+    connection_mother(config * conf, worker * worker_obj, site_comm * sc_obj, schedule * sched_obj);
     ~connection_mother();
     void reload_config(config * conf);
     int create_listen_socket();

@@ -1,7 +1,7 @@
 #ifndef SRC_WORKER_H_
 #define SRC_WORKER_H_
 
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <spdlog/spdlog.h>
 
@@ -57,7 +57,7 @@ class worker {
     worker(config * conf_obj, torrent_list &torrents, user_list &users, std::vector<std::string> &_whitelist, mysql * db_obj, site_comm * sc);
     void reload_config(config * conf);
     std::string work(const std::string &input, std::string &ip, client_opts_t &client_opts);
-    std::string announce(const std::string &input, torrent &tor, user_ptr &u, params_type &params, params_type &headers, std::string &ip, client_opts_t &client_opts);
+    std::string announce(const std::string &input, const std::string &peer_id, torrent &tor, user_ptr &u, params_type &params, params_type &headers, std::string &ip, client_opts_t &client_opts);
     std::string scrape(const std::list<std::string> &infohashes, params_type &headers, client_opts_t &client_opts);
     std::string update(params_type &params, client_opts_t &client_opts);
 

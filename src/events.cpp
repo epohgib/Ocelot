@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <spdlog/spdlog.h>
 
@@ -18,7 +18,7 @@ std::mutex peak_open_mutex;
 
 //---------- Connection mother - spawns middlemen and lets them deal with the connection
 
-connection_mother::connection_mother(config * conf, worker * worker_obj, mysql * db_obj, site_comm * sc_obj, schedule * sched) : work(worker_obj), db(db_obj) {
+connection_mother::connection_mother(config * conf, worker * worker_obj, site_comm * sc_obj, schedule * sched) : work(worker_obj) {
     logger = spdlog::get("logger");
 
     // Handle config stuff first
