@@ -180,8 +180,7 @@ connection_middleman::~connection_middleman() {
 
 // Handler to read data from the socket, called by event loop when socket is readable
 void connection_middleman::handle_read(ev::io &watcher, int events_flags) {
-    char buffer[mother->max_read_buffer + 1];
-    memset(buffer, 0, mother->max_read_buffer + 1);
+    char buffer[mother->max_read_buffer + 1] = {0};
     int ret = recv(connect_sock, &buffer, mother->max_read_buffer, 0);
 
     if (ret <= 0) {

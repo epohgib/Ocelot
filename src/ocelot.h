@@ -3,11 +3,11 @@
 
 // Copyright [2017-2026] Orpheus
 
-#define OCELOT_VERSION_MAJOR 2
-#define OCELOT_VERSION_MINOR 1
-#define OCELOT_VERSION_BUGFIX 5
+#define OCELOT_VERSION_MAJOR 3
+#define OCELOT_VERSION_MINOR 0
+#define OCELOT_VERSION_BUGFIX 0
 #define OCELOT_VERSION_NREV 0
-#define OCELOT_VERSION "2.1.5"
+#define OCELOT_VERSION "3.0.0"
 
 #include <time.h>
 
