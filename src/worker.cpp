@@ -127,7 +127,7 @@ std::string worker::work(const std::string &input, std::string &ip, client_opts_
     if (max_len_increased) {
         logger->info(
             "max client request length raised to {} on action {}",
-            input_length, action
+            input_length, (int)action
         );
     }
 
@@ -946,9 +946,9 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         auto torrent_it = torrents_list.find(info_hash);
         if (torrent_it != torrents_list.end()) {
             torrent_it->second.free_torrent = fl;
-            logger->info("updated torrent {} to FL {}", torrent_it->second.id, fl);
+            logger->info("updated torrent {} to FL {}", torrent_it->second.id, (int)fl);
         } else {
-            logger->warn("failed to find torrent {} to FL {}", info_hash, fl);
+            logger->warn("failed to find torrent {} to FL {}", info_hash, (int)fl);
         }
     } else if (action == "update_torrents") {
         // Each decoded infohash is exactly 20 characters long.
@@ -968,9 +968,9 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
             auto torrent_it = torrents_list.find(info_hash);
             if (torrent_it != torrents_list.end()) {
                 torrent_it->second.free_torrent = fl;
-                logger->info("updated torrent {} to FL {}", torrent_it->second.id, fl);
+                logger->info("updated torrent {} to FL {}", torrent_it->second.id, (int)fl);
             } else {
-                logger->warn("failed to find torrent {} to FL {}", info_hash, fl);
+                logger->warn("failed to find torrent {} to FL {}", info_hash, (int)fl);
             }
         }
     } else if (action == "add_token") {

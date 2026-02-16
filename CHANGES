@@ -1,3 +1,7 @@
+-- 3.0.0 (2026-02-15)
+BUILD
+* compile using the C++17 standard
+
 -- 2.1.5 (2026-02-12)
 FEATURES
 * connection_mother() does not need db access

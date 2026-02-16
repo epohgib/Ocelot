@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <cstdint>
 
 #include <jemalloc/jemalloc.h>
 #include <spdlog/spdlog.h> // debug
@@ -58,7 +59,7 @@ int dump_jemalloc(const char *filename, const char *opts) {
 }
 
 std::string report_jemalloc_plain(const char *opts, const std::string path) {
-    std::string filename(path + "/jemalloc.json." + std::to_string(pthread_self()));
+    std::string filename(path + "/jemalloc.json." + std::to_string(reinterpret_cast<uintptr_t>(pthread_self())));
     if (dump_jemalloc(filename.c_str(), opts) != 0) {
         // return an empty string if something went bananas
         unlink(filename.c_str());
