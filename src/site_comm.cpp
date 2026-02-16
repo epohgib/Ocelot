@@ -83,19 +83,14 @@ void site_comm::do_flush_tokens()
     t_active = true;
     try {
         while (token_queue.size() > 0) {
-            boost::asio::io_service io_service;
+            boost::asio::io_context io_context;
 
-            tcp::resolver resolver(io_service);
-            tcp::resolver::query query(site_host, site_service);
-            tcp::resolver::iterator endpoint_iterator = resolver.resolve(query);
-            tcp::resolver::iterator end;
+            tcp::resolver resolver(io_context);
+            auto endpoints = resolver.resolve(site_host, site_service);
 
-            tcp::socket socket(io_service);
-            boost::system::error_code error = boost::asio::error::host_not_found;
-            while (error && endpoint_iterator != end) {
-                socket.close();
-                socket.connect(*endpoint_iterator++, error);
-            }
+            tcp::socket socket(io_context);
+            boost::system::error_code error;
+            boost::asio::connect(socket, endpoints, error);
             if (error) {
                 throw boost::system::system_error(error);
             }

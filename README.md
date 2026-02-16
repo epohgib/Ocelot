@@ -5,12 +5,14 @@ It supports requests over TCP and can only track IPv4 peers.
 
 ## Ocelot Compile-time Dependencies
 
-* [GCC/G++](http://gcc.gnu.org/) (11+ required; 11.4.0+ recommended)
-* [Boost](http://www.boost.org/) (1.74.0+ required)
-* [libev](http://software.schmorp.de/pkg/libev.html) (required)
+* [CMake](https://cmake.org/) (3.12+ required)
+* [GCC/G++](http://gcc.gnu.org/) (12+ recommended) or [Clang](https://clang.llvm.org/) (5+ minimum)
+* [Boost](http://www.boost.org/) (1.66+ required for `boost::asio::io_context`)
+* [libev](http://software.schmorp.de/pkg/libev.html) (4.0+ required)
 * [MySQL++](http://tangentsoft.net/mysql++/) (3.2.0+ required)
-* [jemalloc](http://jemalloc.net/) (optional, but strongly recommended)
-* [TCMalloc](http://goog-perftools.sourceforge.net/doc/tcmalloc.html) (optional)
+* [MySQL Client](https://dev.mysql.com/downloads/c-api/) (8.0+ recommended)
+* [jemalloc](http://jemalloc.net/) (5.0+ optional, but strongly recommended)
+* [TCMalloc](http://goog-perftools.sourceforge.net/doc/tcmalloc.html) (optional, alternative to jemalloc)
 
 ## Installation
 
@@ -27,7 +29,7 @@ sudo apt-get install \
     libmysql++-dev \
 	netcat-traditional \
     pkg-config
-cmake -Wno-dev . -B build 
+cmake . -B build
 make -C build
 ```
 
@@ -44,7 +46,7 @@ docker run -v $(pwd)/ocelot.conf:/srv/ocelot.conf ocelot
 
 * Prepare the build environment. (This must be re-executed when new source files are added).
 
-        cmake -Wno-dev . -B build
+        cmake . -B build
 
 * Create the following tables according to the [Gazelle database schema](https://raw.githubusercontent.com/WhatCD/Gazelle/master/gazelle.sql):
  - `torrents`

@@ -26,7 +26,7 @@ endif()
 include(FindPackageHandleStandardArgs)
 # handle the QUIETLY and REQUIRED arguments and set LIBEV_FOUND to TRUE
 # if all listed variables are TRUE and the requested version matches.
-find_package_handle_standard_args(Libev REQUIRED_VARS
+find_package_handle_standard_args(LibEv REQUIRED_VARS
                                   LIBEV_LIBRARY LIBEV_INCLUDE_DIR
                                   VERSION_VAR LIBEV_VERSION)
 

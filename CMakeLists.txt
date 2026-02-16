@@ -1,6 +1,6 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.12)
 project(ocelot
-    VERSION 2.0.0
+    VERSION 3.0.0
 )
 
 # Make a subdirectory, and run cmake there (mkdir build; cd build; cmake ..)
@@ -10,7 +10,7 @@ endif()
 
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wfatal-errors")
 
@@ -35,7 +35,8 @@ endif()
 
 #AM_LDFLAGS = -Wl,-O1 -Wl,--as-needed
 
-find_package(Boost COMPONENTS system iostreams REQUIRED)
+# Use modern CMake config mode for Boost
+find_package(Boost REQUIRED COMPONENTS iostreams)
 message(STATUS "Boost_INCLUDE_DIRS='${Boost_INCLUDE_DIRS}'")
 message(STATUS "Boost_LIBRARIES='${Boost_LIBRARIES}'")
 include_directories(${Boost_INCLUDE_DIRS})
@@ -57,8 +58,7 @@ file(GLOB SOURCES src/*.cpp)
 add_executable(ocelot ${HEADERS} ${SOURCES})
 
 SET(LINK_LIBRARIES
-    ${Boost_SYSTEM_LIBRARY}
-    ${Boost_IOSTREAMS_LIBRARY}
+    Boost::iostreams
     ${LIBEV_LIBRARY}
     ${MYSQLPP_LIBRARY}
     Threads::Threads
