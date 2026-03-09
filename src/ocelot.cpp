@@ -93,19 +93,22 @@ int main(int argc, char **argv) {
     // we don't use printf so make cout/cerr a little bit faster
     std::ios_base::sync_with_stdio(false);
 
-    conf = new config();
+    bool conf_arg   = false;
+    bool daemonize  = false;
+    bool ignore_xff = false;
+    bool verbose    = false;
 
-    bool conf_arg  = false;
-    bool daemonize = false;
-    bool verbose   = false;
     std::string conf_file_path("./ocelot.conf");
+    conf = new config();
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-v") == 0) {
             verbose = true;
         } else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--daemonize") == 0) {
             daemonize = true;
-        } else if (strcmp(argv[i], "-c") == 0 && i < argc - 1) {
+        } else if (strcmp(argv[i], "-X") == 0 || strcmp(argv[i], "--ignore-xff") == 0) {
+            ignore_xff = true;
+        } else if (i < argc - 1 && strcmp(argv[i], "-c") == 0) {
             conf_arg = true;
             conf_file_path = argv[++i];
         } else if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0) {
@@ -128,6 +131,10 @@ int main(int argc, char **argv) {
         conf->load(conf_file_path, conf_file);
     }
 
+    if (ignore_xff) {
+        conf->set("ignore_xff", "true");
+    }
+
     if (conf->get_bool("daemonize") || daemonize) {
         create_daemon();
     }
@@ -142,6 +149,7 @@ int main(int argc, char **argv) {
 
     auto combined_logger = std::make_shared<spdlog::logger>("logger", begin(sinks), end(sinks));
     // If we don't set flush on info, the file log takes a long while to actually flush
+    combined_logger->set_level(spdlog::level::info);
     combined_logger->flush_on(spdlog::level::info);
     combined_logger->info(
         "Ocelot version " OCELOT_VERSION ", compiled " __DATE__ " "  __TIME__
@@ -149,7 +157,6 @@ int main(int argc, char **argv) {
     spdlog::register_logger(combined_logger);
 
     db = new mysql(conf);
-
     if (!db->connected()) {
         combined_logger->critical("Could not connect to DB. Exiting!");
         return 0;

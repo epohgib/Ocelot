@@ -62,7 +62,7 @@ class connection_mother {
     std::shared_ptr<spdlog::logger> logger;
 
  public:
-    connection_mother(config * conf, worker * worker_obj, site_comm * sc_obj, schedule * sched_obj);
+    connection_mother(config * conf, worker * w, site_comm * sc_obj, schedule * sched);
     ~connection_mother();
     void reload_config(config * conf);
     int create_listen_socket();
@@ -94,7 +94,7 @@ class connection_middleman {
     worker * work;
 
  public:
-    connection_middleman(int &listen_socket, worker* work, connection_mother * mother_arg);
+    connection_middleman(int &listen_socket, worker * w, connection_mother * mother_arg);
     ~connection_middleman();
 
     void handle_read(ev::io &watcher, int events_flags);

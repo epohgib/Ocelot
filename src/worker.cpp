@@ -2,19 +2,20 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <iostream>
-#include <string>
-#include <map>
-#include <sstream>
 #include <limits>
 #include <list>
-#include <vector>
-#include <set>
-#include <algorithm>
+#include <map>
 #include <mutex>
+#include <set>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "ocelot.h"
 #include "config.h"
@@ -29,9 +30,25 @@
 std::mutex worker::client_len_mutex;
 
 //---------- Worker - does stuff with input
-worker::worker(config * conf_obj, torrent_list &torrents, user_list &users, std::vector<std::string> &_whitelist, mysql * db_obj, site_comm * sc) :
-    conf(conf_obj), db(db_obj), s_comm(sc), torrents_list(torrents), users_list(users), whitelist(_whitelist), status(OPEN), reaper_active(false), randgen((std::random_device())()) {
-    logger = spdlog::get("logger");
+worker::worker(
+    config * conf_obj,
+    torrent_list &torrents,
+    user_list &users,
+    std::vector<std::string> &_whitelist,
+    mysql * db_obj,
+    site_comm * sc
+) :
+    conf(conf_obj),
+    db(db_obj),
+    s_comm(sc),
+    torrents_list(torrents),
+    users_list(users),
+    whitelist(_whitelist),
+    status(OPEN),
+    reaper_active(false),
+    logger(spdlog::get("logger")),
+    randgen((std::random_device())()
+) {
     load_config(conf);
 }
 
@@ -63,15 +80,15 @@ bool worker::shutdown() {
         status = CLOSING;
         logger->info("closing tracker... press Ctrl-C again to terminate");
         return false;
-    } else if (status == CLOSING) {
+    }
+    if (status == CLOSING) {
         logger->info("shutting down uncleanly");
         return true;
-    } else {
-        return false;
     }
+    return false;
 }
 
-std::string worker::work(const std::string &input, std::string &ip, client_opts_t &client_opts) {
+std::string worker::work(const std::string &input, uint32_t remote_addr, client_opts_t &client_opts) {
     unsigned int input_length = input.length();
 
     //---------- Parse request - ugly but fast. Using substr exploded.
@@ -224,6 +241,7 @@ std::string worker::work(const std::string &input, std::string &ip, client_opts_
         client_opts.http_close = true;
     }
 
+    cur_time = time(NULL);
     if (status != OPEN) {
         return error("the tracker is not accepting connections", client_opts);
     } else if (action == INVALID) {
@@ -259,6 +277,33 @@ std::string worker::work(const std::string &input, std::string &ip, client_opts_
         } else if (report_action == "jemalloc") {
             return http_response(
                 report_jemalloc_plain("adex", conf->get_str("report_path")),
+                client_opts
+            );
+        } else if (report_action == "torrent") {
+            std::string infohash = params["info_hash"];
+            if (infohash.empty()) {
+                stats.auth_error_report++;
+                logger->error("torrent report with no infohash");
+                return error("Infohash missing", client_opts);
+            }
+            std::string info_hash_decoded = hex_decode(params["info_hash"]);
+            torrent t;
+            bool found = false;
+            {
+                std::lock_guard<std::mutex> tl_lock(db->torrent_list_mutex);
+                auto it = torrents_list.find(info_hash_decoded);
+                if (it != torrents_list.end()) {
+                    t = it->second;
+                    found = true;
+                }
+            }
+            if (!found) {
+                stats.auth_error_report++;
+                logger->error("torrent infohash not found");
+                return error("Infohash not found", client_opts);
+            }
+            return http_response(
+                report_torrent(t),
                 client_opts
             );
         } else if (report_action == "user") {
@@ -324,6 +369,45 @@ std::string worker::work(const std::string &input, std::string &ip, client_opts_
         return error("Invalid peer ID ", client_opts);
     }
 
+    // If we are behind a forward proxy, trust the X-Forwarded-For header
+    // and replace the remote address (unless configured not to).
+    if (!conf->get_bool("ignore_xff")) {
+        auto it = headers.find("x-forwarded-for");
+        if (it != headers.end()) {
+            std::string ip = it->second;
+            size_t comma_pos = ip.find(',');
+            if (comma_pos != std::string::npos) {
+                ip.resize(comma_pos); // truncate before first comma
+            }
+            struct sockaddr_in sa;
+            if (!inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr))) {
+                return error(
+                    "failed to parse X-Forwarded-For: "
+                    // we received garbage, so avoid pwning anybody
+                    + bintohex(ip),
+                    client_opts
+                );
+            };
+            remote_addr = sa.sin_addr.s_addr;
+        }
+    }
+
+    // Trust the port given by the client.
+    // If it is incorrect, they will not be connectable. Too bad for them.
+    uint16_t remote_port;
+    {
+        auto port_it = params.find("port");
+        if (port_it == params.end()) {
+            return error("no client port parsed from GET", client_opts);
+        }
+        std::string param = port_it->second;
+        auto [ptr, ec] = std::from_chars(param.data(), param.data() + param.size(), remote_port);
+        if (ec != std::errc()) {
+            return error("client port value out of range", client_opts);
+        }
+    }
+    addr_port ap = {remote_addr, htons(remote_port)};
+
     // Let's translate the infohash into something nice
     // info_hash is a url encoded (hex) base 20 number
     std::string info_hash_decoded = hex_decode(params["info_hash"]);
@@ -364,16 +448,20 @@ std::string worker::work(const std::string &input, std::string &ip, client_opts_
     }
     wl_lock.unlock();
 
-    return announce(input, peer_id, tor->second, u, params, headers, ip, client_opts);
+    return announce(input, peer_id, tor->second, u, params, headers, ap, client_opts);
 }
 
-const std::string bencode_warning(const std::string &message) {
-    return "15:warning message" + inttostr(message.length()) + ':' + message;
-}
-
-std::string worker::announce(const std::string &input, const std::string &peer_id, torrent &tor, user_ptr &u, params_type &params, params_type &headers, std::string &ip, client_opts_t &client_opts) {
+std::string worker::announce(
+    const std::string &input,
+    const std::string &peer_id,
+    torrent &tor,
+    user_ptr &u,
+    params_type &params,
+    params_type &headers,
+    const addr_port &ap,
+    client_opts_t &client_opts
+) {
     std::chrono::steady_clock::time_point announce_begin = std::chrono::steady_clock::now();
-    cur_time = time(NULL);
 
     int64_t left = std::max((int64_t)0, strtoint64(params["left"]));
     int64_t uploaded = std::max((int64_t)0, strtoint64(params["uploaded"]));
@@ -388,9 +476,10 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
     bool stopped_torrent = false;    // Was the torrent just stopped?
     bool expire_token = false;       // Whether or not to expire a token after torrent completion
     bool peer_changed = false;       // Whether or not the peer is new or has changed since the last announcement
-    bool invalid_ip = false;
     bool inc_l = false, inc_s = false, dec_l = false, dec_s = false;
     userid_t userid = u->get_id();
+
+    logger->debug("announce: tor={} user={} up={} down={} left={} corrupt={}", tor.id, userid, uploaded, downloaded, left, corrupt);
 
     // "Randomize" the element order in the peer map by prefixing with a peer id byte
     std::stringstream peer_key_stream;
@@ -408,6 +497,7 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
         update_torrent = true;
         active = 0;
     }
+
     peer * p;
     peer_list::iterator peer_it;
     // Insert/find the peer in the torrent list
@@ -559,72 +649,27 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
     }
     p->left = left;
 
-    params_type::const_iterator param_ip = params.find("ip");
-    if (param_ip != params.end()) {
-        ip = param_ip->second;
-    } else if ((param_ip = params.find("ipv4")) != params.end()) {
-        ip = param_ip->second;
-    } else {
-        auto head_itr = headers.find("x-forwarded-for");
-        if (head_itr != headers.end()) {
-            size_t ip_end_pos = head_itr->second.find(',');
-            if (ip_end_pos != std::string::npos) {
-                ip = head_itr->second.substr(0, ip_end_pos);
-            } else {
-                ip = head_itr->second;
-            }
-        }
-    }
-
-    uint16_t port = strtoint32(params["port"]) & 0xFFFF;
-    // Generate compact ip/port string
-    if (inserted || port != p->port || ip != p->ip) {
-        p->port = port;
-        p->ip = ip;
-        p->ip_port = "";
-        char x = 0;
-        for (size_t pos = 0, end = ip.length(); pos < end; pos++) {
-            if (ip[pos] == '.') {
-                p->ip_port.push_back(x);
-                x = 0;
-                continue;
-            } else if (!isdigit(ip[pos])) {
-                invalid_ip = true;
-                break;
-            }
-            x = x * 10 + ip[pos] - '0';
-        }
-        if (!invalid_ip) {
-            p->ip_port.push_back(x);
-            p->ip_port.push_back(port >> 8);
-            p->ip_port.push_back(port & 0xFF);
-        }
-        if (p->ip_port.length() != 6) {
-            p->ip_port.clear();
-            invalid_ip = true;
-        }
-        p->invalid_ip = invalid_ip;
-    } else {
-        invalid_ip = p->invalid_ip;
+    if (inserted || memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0) {
+        p->ap = ap;
     }
 
     // Update the peer
     p->last_announced = cur_time;
-    p->visible = peer_is_visible(u, p);
+    p->visible = p->left == 0 || u->can_leech();
 
     // Add peer data to the database
-    std::stringstream record;
     if (peer_changed) {
-        record << '(' << userid << ',' << tor.id << ',' << active << ',' << uploaded << ',' << downloaded << ',' << upspeed << ',' << downspeed << ',' << left << ',' << corrupt << ',' << (cur_time - p->first_announced) << ',' << p->announces << ',';
-        std::string record_str = record.str();
-        std::string record_ip;
-        if (u->is_protected()) {
-            record_ip = "";
-        } else {
-            record_ip = ip;
+        std::stringstream record;
+        record << '(' << userid << ',' << tor.id << ',' << active << ',' << uploaded << ',' << downloaded << ',' << upspeed << ',' << downspeed << ',' << left << ',' << corrupt
+            << ',' << (cur_time - p->first_announced) << ',' << p->announces
+            << ',' << (u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')');
+        std::string useragent(headers["user-agent"]);
+        if (useragent.length() > 51) {
+            useragent.resize(51);
         }
-        db->record_peer(record_str, record_ip, peer_id, headers["user-agent"]);
+        db->record_peer(record.str(), peer_id, useragent);
     } else {
+        std::stringstream record;
         record << '(' << userid << ',' << tor.id << ',' << (cur_time - p->first_announced) << ',' << p->announces << ',';
         std::string record_str = record.str();
         db->record_peer(record_str, peer_id);
@@ -652,15 +697,12 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
         tor.completed++;
 
         std::stringstream record;
-        std::string record_ip;
-        if (u->is_protected()) {
-            record_ip = "";
-        } else {
-            record_ip = ip;
-        }
-        record << '(' << userid << ',' << tor.id << ',' << cur_time;
-        std::string record_str = record.str();
-        db->record_snatch(record_str, record_ip);
+        record << '(' << userid
+            << ',' << tor.id
+            << ',' << cur_time
+            << ',' << (u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')')
+            << ')';
+        db->record_snatch(record.str());
 
         // User is a seeder now!
         if (!inserted) {
@@ -724,7 +766,7 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
                         ++i;
                         continue;
                     }
-                    peers.append(i->second.ip_port);
+                    peers.append(i->second.ap.addr_port, sizeof(ap.addr_port));
                     found_peers++;
                     tor.last_selected_seeder = i->first;
                     ++i;
@@ -734,11 +776,11 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
             if (found_peers < numwant && tor.leechers.size() > 1) {
                 for (peer_list::const_iterator i = tor.leechers.begin(); i != tor.leechers.end() && found_peers < numwant; ++i) {
                     // Don't show users themselves or leech disabled users
-                    if (i->second.user->is_deleted() || i->second.ip_port == p->ip_port || i->second.user->get_id() == userid || !i->second.visible) {
+                    if (i->second.user->is_deleted() || i->second.user->get_id() == userid || !i->second.visible) {
                         continue;
                     }
                     found_peers++;
-                    peers.append(i->second.ip_port);
+                    peers.append(i->second.ap.addr_port, sizeof(ap.addr_port));
                 }
 
             }
@@ -750,7 +792,7 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
                     continue;
                 }
                 found_peers++;
-                peers.append(i->second.ip_port);
+                peers.append(i->second.ap.addr_port, sizeof(ap.addr_port));
             }
         }
     }
@@ -820,27 +862,25 @@ std::string worker::announce(const std::string &input, const std::string &peer_i
 
     std::string output = "d8:completei";
     output.reserve(350);
-    output += inttostr(tor.seeders.size());
-    output += "e10:downloadedi";
-    output += inttostr(tor.completed);
-    output += "e10:incompletei";
-    output += inttostr(tor.leechers.size());
-    output += "e8:intervali";
-    output += inttostr(announce_interval + jitter(randgen));
-    output += "e12:min intervali";
-    output += inttostr(announce_interval);
-    output += "e5:peers";
+    output += std::to_string(tor.seeders.size())
+        + "e10:downloadedi"
+        + std::to_string(tor.completed)
+        + "e10:incompletei"
+        + std::to_string(tor.leechers.size())
+        + "e8:intervali"
+        + std::to_string(announce_interval + jitter(randgen))
+        + "e12:min intervali"
+        + std::to_string(announce_interval)
+        + "e5:peers";
     if (peers.length() == 0) {
         output += "0:";
     } else {
-        output += inttostr(peers.length());
+        output += std::to_string(peers.length());
         output += ":";
         output += peers;
     }
-    if (invalid_ip) {
-        output += bencode_warning("Illegal character found in IP address. IPv6 is not supported");
-    }
     output += 'e';
+    logger->debug("announce: tor={} user={} peer({}) response({})", tor.id, userid, bintohex(peers), output);
 
     /* gzip compression actually makes announce returns larger from our
      * testing. Feel free to enable this here if you'd like but be aware of
@@ -870,16 +910,16 @@ std::string worker::scrape(const std::list<std::string> &infohashes, params_type
         }
         torrent *t = &(tor->second);
 
-        output += inttostr(infohash.length());
-        output += ':';
-        output += infohash;
-        output += "d8:completei";
-        output += inttostr(t->seeders.size());
-        output += "e10:incompletei";
-        output += inttostr(t->leechers.size());
-        output += "e10:downloadedi";
-        output += inttostr(t->completed);
-        output += "ee";
+        output += std::to_string(infohash.length())
+            + ':'
+            + infohash
+            + "d8:completei"
+            + std::to_string(t->seeders.size())
+            + "e10:incompletei"
+            + std::to_string(t->leechers.size())
+            + "e10:downloadedi"
+            + std::to_string(t->completed)
+            + "ee";
     }
     output += "ee";
     if (headers["accept-encoding"].find("gzip") != std::string::npos) {
@@ -904,7 +944,8 @@ std::string worker::update(params_type &params, client_opts_t &client_opts) {
         } else {
             users_list[newpasskey] = u->second;
             users_list.erase(oldpasskey);
-            logger->info("changed passkey from {} to {} for user {}",
+            logger->info(
+                "changed passkey from {} to {} for user {}",
                 oldpasskey, newpasskey, u->second->get_id()
             );
         }
@@ -1348,10 +1389,4 @@ std::string worker::get_del_reason(int code) {
             return "";
             break;
     }
-}
-
-/* Peers should be invisible if they are a leecher without
-   download privs or their IP is invalid */
-bool worker::peer_is_visible(user_ptr &u, peer *p) {
-    return (p->left == 0 || u->can_leech()) && !p->invalid_ip;
 }

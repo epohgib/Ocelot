@@ -4,10 +4,10 @@
 // Copyright [2017-2026] Orpheus
 
 #define OCELOT_VERSION_MAJOR 3
-#define OCELOT_VERSION_MINOR 0
+#define OCELOT_VERSION_MINOR 1
 #define OCELOT_VERSION_BUGFIX 0
 #define OCELOT_VERSION_NREV 0
-#define OCELOT_VERSION "3.0.0"
+#define OCELOT_VERSION "3.1.0"
 
 #include <time.h>
 
@@ -25,7 +25,16 @@ typedef uint32_t userid_t;
 class user;
 typedef std::shared_ptr<user> user_ptr;
 
+typedef union {
+    struct {
+        uint32_t addr;
+        uint16_t port;
+    };
+    char addr_port[sizeof(uint32_t) + sizeof(uint16_t)];
+} addr_port;
+
 typedef struct {
+    user_ptr user;
     int64_t uploaded;
     int64_t downloaded;
     int64_t corrupt;
@@ -33,12 +42,8 @@ typedef struct {
     time_t last_announced;
     time_t first_announced;
     uint32_t announces;
-    uint16_t port;
+    addr_port ap;
     bool visible;
-    bool invalid_ip;
-    user_ptr user;
-    std::string ip_port;
-    std::string ip;
 } peer;
 
 typedef std::map<std::string, peer> peer_list;

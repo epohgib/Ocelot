@@ -10,6 +10,7 @@ RUN apt-get update \
         libboost-iostreams-dev \
         libboost-system-dev \
         libev-dev \
+        libfmt-dev \
         libjemalloc-dev \
         libmysql++-dev \
         netcat-traditional \
@@ -19,7 +20,7 @@ RUN apt-get update \
 COPY . /srv
 WORKDIR /srv
 
-RUN cmake -Wno-dev -S /srv -B /srv/build \
+RUN cmake -S /srv -B /srv/build \
     && make -C build \
     && apt-get purge -y \
         build-essential \

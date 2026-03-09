@@ -1,7 +1,7 @@
 #ifndef SRC_DB_H_
 #define SRC_DB_H_
 
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #pragma GCC visibility push(default)
 
@@ -70,7 +70,7 @@ class mysql {
     void reload_config(config * conf);
     void flush();
     bool connected();
-    bool all_clear();
+    bool all_clear() const;
     void load_torrents(torrent_list &torrents);
     void load_users(user_list &users);
     void load_whitelist(std::vector<std::string> &whitelist);
@@ -81,11 +81,11 @@ class mysql {
     // (id,seeders,leechers,snatched_change,balance)
     void record_torrent(const std::string &record);
 
-    // (uid,fid,tstamp)
-    void record_snatch(const std::string &record, const std::string &ip);
+    // (uid,fid,tstamp,inet_ntoa(addr))
+    void record_snatch(const std::string &record);
 
-    // (uid,fid,active,peerid,useragent,ip,uploaded,downloaded,upspeed,downspeed,left,timespent,announces,tstamp)
-    void record_peer(const std::string &record, const std::string &ip, const std::string &peer_id, const std::string &useragent);
+    // (uid,fid,active,peerid,useragent,inet_ntoa(addr),uploaded,downloaded,upspeed,downspeed,left,timespent,announces,tstamp)
+    void record_peer(const std::string &record, const std::string &peer_id, const std::string &useragent);
 
     // (fid,peerid,timespent,announces,tstamp)
     void record_peer(const std::string &record, const std::string &peer_id);

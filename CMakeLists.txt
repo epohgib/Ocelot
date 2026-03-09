@@ -8,7 +8,6 @@ if (CMAKE_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR)
    message(FATAL_ERROR "Source and build directories cannot be the same.")
 endif()
 
-
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,6 +49,9 @@ find_package(MYSQLPP REQUIRED)
 find_package(LibEv REQUIRED)
 include_directories(${LIBEV_INCLUDE_DIR})
 
+find_package(fmt REQUIRED)
+message(STATUS "Found libfmt version ${fmt_VERSION}")
+
 include_directories(${CMAKE_SOURCE_DIR}/libs)
 
 file(GLOB HEADERS src/*.h)
@@ -60,6 +62,7 @@ add_executable(ocelot ${HEADERS} ${SOURCES})
 SET(LINK_LIBRARIES
     Boost::iostreams
     ${LIBEV_LIBRARY}
+    ${LIBFMT_IBRARY}
     ${MYSQLPP_LIBRARY}
     Threads::Threads
 )
@@ -74,5 +77,6 @@ endif()
 
 target_link_libraries(
     ocelot
+    fmt::fmt
     ${LINK_LIBRARIES}
 )

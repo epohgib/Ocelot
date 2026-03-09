@@ -1,3 +1,16 @@
+-- 3.1.0 (2026-03-06)
+FEATURES
+* Ocelot now uses remote address of listen socket or X-Forwarded-For header as IP source.
+* IP addresses are maintained as 32bit ints internally rather than strings. This slims down the peer struct.
+* Introduce an --ignore-xff flag to override the reading of said header.
+* Ocelot used to "DELETE FROM torrents WHERE info_hash = ''". This no longer happens.
+* Improved consistency of logging messages.
+* Removed hand-rolled inttostr()
+* Added const to methods and parameters where possible, some methods were made static. (cppcheck)
+* Added a report torrent endpoint (using libfmt)
+BUGFIXES
+* When inserting a new torrent, set last_flushed to 0.
+
 -- 3.0.0 (2026-02-15)
 BUILD
 * compile using the C++17 standard
@@ -62,7 +75,7 @@ Add site_service config option to set the service/port ocelot runs on (defaults 
 BUGFIXES
 * Fix FreeBSD support (thanks @HierraStrunger)
 BUILD
-* Drop Vagranfile in favor of only supporting the Dockerfile
+* Drop Vagrantfile in favor of only supporting the Dockerfile
 
 -- 1.1 (2018-10-29)
 Move to spdlog (https://github.com/gabime/spdlog)to handle logging instead of cout

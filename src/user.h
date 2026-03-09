@@ -1,7 +1,7 @@
 #ifndef SRC_USER_H_
 #define SRC_USER_H_
 
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <atomic>
 
@@ -20,19 +20,21 @@ class user {
 
  public:
     user(userid_t uid, bool leech, bool protect);
-    userid_t get_id() { return id; }
-    bool is_deleted() { return deleted; }
+
+    userid_t get_id() const { return id; }
+    bool is_deleted() const { return deleted; }
+    bool is_protected() const { return protect_ip; }
+    bool can_leech() const { return leechstatus; }
+    uint32_t get_leeching() const { return stats.leeching; }
+    uint32_t get_seeding() const { return stats.seeding; }
+
     void set_deleted(bool status) { deleted = status; }
-    bool is_protected() { return protect_ip; }
-    void set_protected(bool status) { protect_ip = status; }
-    bool can_leech() { return leechstatus; }
     void set_leechstatus(bool status) { leechstatus = status; }
+    void set_protected(bool status) { protect_ip = status; }
     void decr_leeching() { --stats.leeching; }
     void decr_seeding() { --stats.seeding; }
     void incr_leeching() { ++stats.leeching; }
     void incr_seeding() { ++stats.seeding; }
-    uint32_t get_leeching() { return stats.leeching; }
-    uint32_t get_seeding() { return stats.seeding; }
 };
 
 #endif  // SRC_USER_H_

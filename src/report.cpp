@@ -6,6 +6,7 @@
 #include <sys/resource.h>
 #include <cstdint>
 
+#include <fmt/format.h>
 #include <jemalloc/jemalloc.h>
 #include <spdlog/spdlog.h> // debug
 
@@ -58,7 +59,7 @@ int dump_jemalloc(const char *filename, const char *opts) {
     return result;
 }
 
-std::string report_jemalloc_plain(const char *opts, const std::string path) {
+std::string report_jemalloc_plain(const char *opts, const std::string &path) {
     std::string filename(path + "/jemalloc.json." + std::to_string(reinterpret_cast<uintptr_t>(pthread_self())));
     if (dump_jemalloc(filename.c_str(), opts) != 0) {
         // return an empty string if something went bananas
@@ -143,11 +144,11 @@ std::string report(const uint32_t announce_interval, const uint32_t announce_jit
     return output.str();
 }
 
-std::string report_prom_stats(const char *jemalloc) {
+std::string report_prom_stats(const char *jemalloc_stats) {
     std::ostringstream output;
 
     struct ocelot_alloc_info ji;
-    int result = jemalloc_parse(jemalloc, &ji);
+    int result = jemalloc_parse(jemalloc_stats, &ji);
 
     output << "ocelot_uptime " << time(NULL) - stats.start_time << "\n"
         "ocelot_version " << OCELOT_VERSION_MAJOR
@@ -277,6 +278,39 @@ std::string report_prom_stats(const char *jemalloc) {
     }
     output << '#';
     return output.str();
+}
+
+std::string report_torrent(const torrent &t) {
+    std::string output = fmt::format(
+        "{{\"id\":{},"
+        "\"completed\":{},"
+        "\"balance\":{},"
+        "\"last_flushed\":{},"
+        "\"last_selected_seeder\":\"{}\","
+        "\"leech_type\":{},"
+        "\"leecher_list\":[",
+        t.id,
+        t.completed,
+        t.balance,
+        t.last_flushed,
+        t.last_selected_seeder,
+        t.free_torrent
+    );
+    int n = 0;
+    for (auto peer : t.leechers) {
+        output += std::string(n++ == 0 ? "" : ",") + std::to_string(peer.second.user->get_id());
+    }
+    n = 0;
+    output += "],\"seeder_list\":[";
+    for (auto peer : t.seeders) {
+        output += std::string(n++ == 0 ? "" : ",") + std::to_string(peer.second.user->get_id());
+    }
+    n = 0;
+    output += "],\"fltoken_list\":[";
+    for (userid_t id : t.tokened_users) {
+        output += std::string(n++ == 0 ? "" : ",") + std::to_string(id);
+    }
+    return output + "]}\n";
 }
 
 std::string report_user(const user_ptr u) {

@@ -1,7 +1,7 @@
 #ifndef SRC_SITE_COMM_H_
 #define SRC_SITE_COMM_H_
 
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <spdlog/spdlog.h>
 
@@ -35,7 +35,7 @@ class site_comm {
     bool verbose_flush;
     site_comm(config * conf);
     void reload_config(config * conf);
-    bool all_clear();
+    bool all_clear() const;
     void expire_token(int torrent, int user);
     void flush_tokens();
     ~site_comm();
