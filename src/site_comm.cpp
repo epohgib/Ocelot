@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <spdlog/spdlog.h>
 
@@ -18,8 +18,7 @@
 
 using boost::asio::ip::tcp;
 
-site_comm::site_comm(config * conf) : t_active(false) {
-    logger = spdlog::get("logger");
+site_comm::site_comm(config * conf) : logger(spdlog::get("logger")), t_active(false), verbose_flush(false) {
     load_config(conf);
 }
 
@@ -35,7 +34,7 @@ void site_comm::reload_config(config * conf) {
     load_config(conf);
 }
 
-bool site_comm::all_clear() {
+bool site_comm::all_clear() const {
     return (token_queue.size() == 0);
 }
 

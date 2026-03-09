@@ -49,15 +49,15 @@ class worker {
     void do_start_reaper();
     void reap_peers();
     void reap_del_reasons();
-    std::string get_del_reason(int code);
-    peer_list::iterator add_peer(peer_list &peer_list, const std::string &peer_id);
-    inline bool peer_is_visible(user_ptr &u, peer *p);
+    peer_list::iterator add_peer(peer_list &peer_list, const std::string &peer_key);
+
+    static std::string get_del_reason(int code);
 
  public:
     worker(config * conf_obj, torrent_list &torrents, user_list &users, std::vector<std::string> &_whitelist, mysql * db_obj, site_comm * sc);
     void reload_config(config * conf);
-    std::string work(const std::string &input, std::string &ip, client_opts_t &client_opts);
-    std::string announce(const std::string &input, const std::string &peer_id, torrent &tor, user_ptr &u, params_type &params, params_type &headers, std::string &ip, client_opts_t &client_opts);
+    std::string work(const std::string &input, uint32_t remote_addr, client_opts_t &client_opts);
+    std::string announce(const std::string &input, const std::string &peer_id, torrent &tor, user_ptr &u, params_type &params, params_type &headers, const addr_port &ap, client_opts_t &client_opts);
     std::string scrape(const std::list<std::string> &infohashes, params_type &headers, client_opts_t &client_opts);
     std::string update(params_type &params, client_opts_t &client_opts);
 

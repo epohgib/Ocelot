@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <algorithm>
 #include <sstream>
@@ -10,13 +10,13 @@
 #include "misc_functions.h"
 #include "response.h"
 
-const std::string http_head(size_t content_length, client_opts_t &client_opts) {
+const std::string http_head(size_t content_length, const client_opts_t &client_opts) {
     const std::string content_type = client_opts.html ? "text/html" : "text/plain";
 
     // rely on preprocessor string concatenation
     std::string head = "HTTP/1.1 200 OK\r\nServer: Ocelot " OCELOT_VERSION "\r\n"
         "Content-Type: " + content_type + "\r\n"
-        "Content-Length: " + inttostr(content_length) + "\r\n";
+        "Content-Length: " + std::to_string(content_length) + "\r\n";
     if (client_opts.gzip) {
         head += "Content-Encoding: gzip\r\n";
     }
@@ -26,7 +26,7 @@ const std::string http_head(size_t content_length, client_opts_t &client_opts) {
     return head + "\r\n";
 }
 
-const std::string http_response(const std::string &body, client_opts_t &client_opts) {
+const std::string http_response(const std::string &body, const client_opts_t &client_opts) {
     std::string out;
     bool processed = false;
     if (client_opts.html) {
@@ -49,9 +49,9 @@ const std::string http_response(const std::string &body, client_opts_t &client_o
     return http_head(body.length(), client_opts) + body;
 }
 
-const std::string error(const std::string &message, client_opts_t &client_opts) {
+const std::string error(const std::string &message, const client_opts_t &client_opts) {
     return http_response(
-        "d14:failure reason" + inttostr(message.length()) + ':' + message
+        "d14:failure reason" + std::to_string(message.length()) + ':' + message
             + "12:min intervali5400e8:intervali5400ee",
         client_opts
     );

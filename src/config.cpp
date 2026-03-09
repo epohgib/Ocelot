@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <spdlog/spdlog.h>
 
@@ -67,6 +67,7 @@ void config::init() {
     add("connection_timeout", 10u);
     add("keepalive_timeout", 0u);
     add("daemonize", false);
+    add("ignore_xff", false);
 
     // Tracker requests
     add("announce_interval", 1800u);

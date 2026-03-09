@@ -12,10 +12,13 @@ void copy_stats(const struct stats_t *in, struct stats_t *out);
 std::string report(const uint32_t announce_interval, const uint32_t announce_jitter);
 
 // a snapshot of jemalloc statistics
-std::string report_jemalloc_plain(const char *opts, const std::string path);
+std::string report_jemalloc_plain(const char *opts, const std::string &path);
 
 // a prometheus scrape
 std::string report_prom_stats(const char *jemalloc_stats);
+
+// torrent status report
+std::string report_torrent(const torrent &t);
 
 // user report
 std::string report_user(const user_ptr u);

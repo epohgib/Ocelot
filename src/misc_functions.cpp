@@ -1,4 +1,4 @@
-// Copyright [2017-2024] Orpheus
+// Copyright [2017-2026] Orpheus
 
 #include <iostream>
 #include <sstream>
@@ -18,15 +18,6 @@ int64_t strtoint64(const std::string& str) {
     int64_t i = 0;
     stream >> i;
     return i;
-}
-
-
-std::string inttostr(const int i) {
-    std::string str;
-    std::stringstream out;
-    out << i;
-    str = out.str();
-    return str;
 }
 
 std::string hex_decode(const std::string &in) {
