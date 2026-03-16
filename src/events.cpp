@@ -18,9 +18,7 @@ std::mutex peak_open_mutex;
 
 //---------- Connection mother - spawns middlemen and lets them deal with the connection
 
-connection_mother::connection_mother(config * conf, worker * w, site_comm * sc_obj, schedule * sched) : work(w) {
-    logger = spdlog::get("logger");
-
+connection_mother::connection_mother(config * conf, worker * w, site_comm * sc_obj, schedule * sched) : work(w), logger(spdlog::get("logger")) {
     // Handle config stuff first
     load_config(conf);
 
@@ -245,7 +243,7 @@ void connection_middleman::handle_write(ev::io &watcher, int events_flags) {
     }
 }
 
-// After a middleman has been alive for timout_interval seconds, this is called
+// After a middleman has been alive for timeout_interval seconds, this is called
 void connection_middleman::handle_timeout(ev::timer &watcher, int events_flags) {
     timeout_event.stop();
     read_event.stop();

@@ -8,6 +8,7 @@ FEATURES
 * Removed hand-rolled inttostr()
 * Added const to methods and parameters where possible, some methods were made static. (cppcheck)
 * Added a report torrent endpoint (using libfmt)
+* Reduce memory reallocations in building db buffers
 BUGFIXES
 * When inserting a new torrent, set last_flushed to 0.
 
