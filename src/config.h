@@ -25,17 +25,17 @@ class confval {
     uint32_t get_uint();
     bool get_bool();
     std::string get_str();
-    void set(const std::string &val);
+    void set(const std::string &value);
 };
 
 class config {
  private:
     template <typename T> void add(const std::string &setting_name, T value);
-    std::string trim(const std::string str);
     void init();
+    std::string trim(const std::string str);
     confval * get(const std::string &setting_name);
     std::map<std::string, confval> settings;
-    confval * dummy_setting;
+    confval dummy_setting;
  public:
     config();
     void load(std::istream &conf_file);

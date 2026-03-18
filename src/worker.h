@@ -19,6 +19,17 @@
 
 enum tracker_status { OPEN, PAUSED, CLOSING };  // tracker status
 
+typedef struct {
+    std::string useragent;
+    int64_t uploaded;
+    int64_t downloaded;
+    int64_t left;
+    int64_t corrupt;
+    bool event_completed;
+    bool event_started;
+    bool event_stopped;
+} announce_context;
+
 class worker {
  private:
     config * conf;
@@ -36,10 +47,10 @@ class worker {
     std::uniform_int_distribution<int> jitter;
     static std::mutex client_len_mutex;
 
-    unsigned int announce_interval;
-    unsigned int del_reason_lifetime;
-    unsigned int peers_timeout;
-    unsigned int numwant_limit;
+    uint32_t announce_interval;
+    uint32_t del_reason_lifetime;
+    uint32_t peers_timeout;
+    uint32_t numwant_limit;
     bool keepalive_enabled;
     std::string site_password;
     std::string report_password;
@@ -57,14 +68,14 @@ class worker {
     worker(config * conf_obj, torrent_list &torrents, user_list &users, std::vector<std::string> &_whitelist, mysql * db_obj, site_comm * sc);
     void reload_config(config * conf);
     std::string work(const std::string &input, uint32_t remote_addr, client_opts_t &client_opts);
-    std::string announce(const std::string &input, const std::string &peer_id, torrent &tor, user_ptr &u, params_type &params, params_type &headers, const addr_port &ap, client_opts_t &client_opts);
+    std::string announce(const std::string &peer_id, torrent &tor, user_ptr &u, const announce_context *ctx, uint32_t numwant, const addr_port &ap, client_opts_t &client_opts);
     std::string scrape(const std::list<std::string> &infohashes, params_type &headers, client_opts_t &client_opts);
-    std::string update(params_type &params, client_opts_t &client_opts);
+    std::string update(params_type &params, const client_opts_t &client_opts);
 
     void reload_lists();
     bool shutdown();
 
-    tracker_status get_status() { return status; }
+    tracker_status get_status() const { return status; }
 
     void start_reaper();
 };
