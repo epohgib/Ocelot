@@ -5,17 +5,12 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
-#include <iostream>
 #include <limits>
-#include <list>
 #include <map>
-#include <mutex>
 #include <set>
 #include <sstream>
-#include <string>
 #include <thread>
 #include <utility>
-#include <vector>
 
 #include "ocelot.h"
 #include "config.h"
@@ -28,6 +23,11 @@
 #include "user.h"
 
 std::mutex worker::client_len_mutex;
+
+const uint64_t xxh_seed = []() {
+    std::random_device rd;
+    return rd();
+}();
 
 //---------- Worker - does stuff with input
 worker::worker(
@@ -498,12 +498,11 @@ std::string worker::announce(
 
     logger->debug("announce: tor={} user={} up={} down={} left={} corrupt={}", tor.id, userid, ctx->uploaded, ctx->downloaded, ctx->left, ctx->corrupt);
 
-    // "Randomize" the element order in the peer map by prefixing with a peer id byte
-    std::stringstream peer_key_stream;
-    peer_key_stream << peer_id[12 + (tor.id & 7)]
-        << userid  // Include user id in the key to lower chance of peer id collisions
-        << peer_id;
-    const std::string peer_key(peer_key_stream.str());
+    xxh::hash3_state_t<64> state(xxh_seed);
+    state.update(peer_id);
+    state.update(ap.addr_port, sizeof(ap.addr_port));
+    state.update(&userid, sizeof(userid_t));
+    const peerkey_t peer_key = state.digest();
 
     if (ctx->event_completed) {
         // Don't update <snatched> here as we may decide to use other conditions later on
@@ -525,7 +524,7 @@ std::string worker::announce(
             if (peer_it != tor.seeders.end()) {
                 // Move from seeders to leechers
                 p = &peer_it->second;
-                auto insert = tor.leechers.insert(std::pair<std::string, peer>(peer_key, *p));
+                auto insert = tor.leechers.insert(std::pair<peerkey_t, peer>(peer_key, *p));
                 tor.seeders.erase(peer_it);
                 peer_it = insert.first;
                 peer_changed = true;
@@ -571,7 +570,7 @@ std::string worker::announce(
             } else {
                 // Move peer from leechers to seeders
                 p = &peer_it->second;
-                auto insert = tor.seeders.insert(std::pair<std::string, peer>(peer_key, *p));
+                auto insert = tor.seeders.insert(std::pair<peerkey_t, peer>(peer_key, *p));
                 tor.leechers.erase(peer_it);
                 peer_it = insert.first;
                 peer_changed = true;
@@ -722,7 +721,7 @@ std::string worker::announce(
 
         // User is a seeder now!
         if (!inserted) {
-            auto insert = tor.seeders.insert(std::pair<std::string, peer>(peer_key, *p));
+            auto insert = tor.seeders.insert(std::pair<peerkey_t, peer>(peer_key, *p));
             tor.leechers.erase(peer_it);
             peer_it = insert.first;
             p = &peer_it->second;
@@ -751,7 +750,7 @@ std::string worker::announce(
 
                 // Find out where to begin in the seeder list
                 peer_list::const_iterator i;
-                if (tor.last_selected_seeder.empty()) {
+                if (tor.last_selected_seeder == 0) {
                     i = tor.seeders.begin();
                 } else {
                     i = tor.seeders.find(tor.last_selected_seeder);
@@ -977,7 +976,7 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
             t->id = static_cast<torid_t>(strtoint32(params["id"]));
             t->balance = 0;
             t->completed = 0;
-            t->last_selected_seeder = "";
+            t->last_selected_seeder = 0;
         } else {
             t = &i->second;
         }
@@ -1212,9 +1211,9 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
     return http_response("success", client_opts);
 }
 
-peer_list::iterator worker::add_peer(peer_list &peer_list, const std::string &peer_key) {
+peer_list::iterator worker::add_peer(peer_list &peer_list, const peerkey_t &peer_key) {
     peer new_peer;
-    auto it = peer_list.insert(std::pair<std::string, peer>(peer_key, new_peer));
+    auto it = peer_list.insert(std::pair<peerkey_t, peer>(peer_key, new_peer));
     return it.first;
 }
 
@@ -1236,11 +1235,12 @@ void worker::reap_peers() {
     time_t max_time = time(NULL) - peers_timeout;
     logger->info("starting peer reaper, max time {}, timeout {}", max_time, peers_timeout);
 
-    unsigned int reaped_l = 0, reaped_s = 0;
-    unsigned int cleared_torrents = 0;
-    unsigned int total_torrent = 0;
-    unsigned int total_peer = 0;
-    unsigned int total_leecher = 0;
+    uint32_t reaped_leecher   = 0;
+    uint32_t reaped_seeder    = 0;
+    uint32_t cleared_torrents = 0;
+    uint32_t total_torrent    = 0;
+    uint32_t total_seeder     = 0;
+    uint32_t total_leecher    = 0;
 
     std::chrono::steady_clock::time_point lock_begin;
     std::chrono::steady_clock::time_point lock_end;
@@ -1264,19 +1264,19 @@ void worker::reap_peers() {
                     p->second.user->decr_leeching();
                     p = t->second.leechers.erase(p);
                     reaped_this = true;
-                    reaped_l++;
+                    reaped_leecher++;
                 }
             }
             p = t->second.seeders.begin();
             while (p != t->second.seeders.end()) {
-                total_peer++;
+                total_seeder++;
                 if (p->second.last_announced > max_time) {
                     p++;
                 } else {
                     p->second.user->decr_seeding();
                     p = t->second.seeders.erase(p);
                     reaped_this = true;
-                    reaped_s++;
+                    reaped_seeder++;
                 }
             }
             if (reaped_this && t->second.seeders.empty() && t->second.leechers.empty()) {
@@ -1294,8 +1294,11 @@ void worker::reap_peers() {
     auto reap_duration = std::chrono::duration_cast<std::chrono::microseconds>(reap_end - lock_end);
 
     stats.reap_total++;
-    stats.leechers = total_leecher;
-    stats.seeders  = total_peer;
+
+    uint32_t old_leech = stats.leechers;
+    uint32_t old_seed  = stats.seeders;
+    stats.leechers     = total_leecher;
+    stats.seeders      = total_seeder;
     stats.reap_lock_duration.fetch_add(
         lock_duration.count()
     );
@@ -1304,10 +1307,12 @@ void worker::reap_peers() {
     );
 
     logger->info(
-        "reaped {} leechers and {} seeders. Reset {} torrents."
-        " Lock acquired in {}us, scanned {} torrents ({} peers, {} leechers) in {}us.",
-        reaped_l, reaped_s, cleared_torrents,
-        lock_duration.count(), total_torrent, total_peer, total_leecher, reap_duration.count()
+        "reaped {} leechers and {} seeders in {}us,"
+        " lock acquired in {}us, torrents scanned: {},"
+        " reset {} (adjusted seeders: {} => {}, leechers: {} => {})",
+        reaped_leecher, reaped_seeder, reap_duration.count(),
+        lock_duration.count(), cleared_torrents,
+        total_torrent, old_seed, total_seeder, old_leech, total_leecher
     );
 }
 

@@ -1,8 +1,9 @@
--- 3.1.0 (2026-03-06)
+-- 3.1.0 (2026-03-28)
 FEATURES
 * Ocelot now uses remote address of listen socket or X-Forwarded-For header as IP source.
-* IP addresses are maintained as 32bit ints internally rather than strings. This slims down the peer struct.
 * Introduce an --ignore-xff flag to override the reading of said header.
+* IP addresses are maintained as 32bit ints internally rather than strings. This slims down the peer struct.
+* Peer keys are now hashed to a 64-bit value using the xxhash3 algorithm, removing further bloat from the peer struct.
 * Ocelot used to "DELETE FROM torrents WHERE info_hash = ''". This no longer happens.
 * Improved consistency of logging messages.
 * Removed hand-rolled inttostr()
