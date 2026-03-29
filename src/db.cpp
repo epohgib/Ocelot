@@ -125,7 +125,7 @@ void mysql::load_torrents(torrent_list &torrents) {
                 tor.completed            = res[i][3];
                 tor.balance              = 0;
                 tor.last_flushed         = 0;
-                tor.last_selected_seeder = "";
+                tor.last_selected_seeder = 0;
             } else {
                 tor.tokened_users.clear();
                 cur_keys.erase(info_hash);

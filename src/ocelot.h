@@ -6,21 +6,24 @@
 #define OCELOT_VERSION_MAJOR 3
 #define OCELOT_VERSION_MINOR 1
 #define OCELOT_VERSION_BUGFIX 0
-#define OCELOT_VERSION_NREV 1
-#define OCELOT_VERSION "3.1.0-1"
+#define OCELOT_VERSION_NREV 3
+#define OCELOT_VERSION "3.1.0-3"
 
 #include <time.h>
 
-#include <string>
-#include <map>
-#include <vector>
-#include <unordered_map>
-#include <set>
-#include <memory>
 #include <atomic>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "xxhash.hpp"
 
 typedef uint32_t torid_t;
 typedef uint32_t userid_t;
+typedef xxh::hash_t<64> peerkey_t;
 
 class user;
 typedef std::shared_ptr<user> user_ptr;
@@ -46,7 +49,7 @@ typedef struct {
     bool visible;
 } peer;
 
-typedef std::map<std::string, peer> peer_list;
+typedef std::map<peerkey_t, peer> peer_list;
 
 enum freetype { NORMAL, FREE, NEUTRAL };
 
@@ -58,7 +61,7 @@ typedef struct {
     time_t last_flushed;
     peer_list seeders;
     peer_list leechers;
-    std::string last_selected_seeder;
+    peerkey_t last_selected_seeder;
     std::set<userid_t> tokened_users;
 } torrent;
 

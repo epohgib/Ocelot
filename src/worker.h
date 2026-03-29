@@ -5,15 +5,15 @@
 
 #include <spdlog/spdlog.h>
 
-#include <string>
-#include <vector>
-#include <list>
-#include <unordered_map>
+#include <ctime>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <mutex>
-#include <ctime>
 #include <random>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "site_comm.h"
 
@@ -60,7 +60,7 @@ class worker {
     void do_start_reaper();
     void reap_peers();
     void reap_del_reasons();
-    peer_list::iterator add_peer(peer_list &peer_list, const std::string &peer_key);
+    peer_list::iterator add_peer(peer_list &peer_list, const peerkey_t &peer_key);
 
     static std::string get_del_reason(int code);
 
