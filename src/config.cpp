@@ -94,7 +94,8 @@ void config::init() {
     add("report_password", "00000000000000000000000000000000");
 
     // Logging
-    add("log", false);
+    add("log", true);
+    add("log_level", "err");
     add("log_path", "ocelot");  // path to where to write log + name of log (don't need to put file extension)
 
     add("report_path", "/tmp");  // path for transfer to website (should be a tmpfs in production)
@@ -149,10 +150,21 @@ void config::reload() {
     std::string conf_file_path(get_str("conf_file_path"));
     std::ifstream conf_file(conf_file_path);
     if (conf_file.fail()) {
-        spdlog::get("logger")->error("Config file '" + conf_file_path + "' couldn't be opened");
+        spdlog::get("logger")->error("config file '{}' could not be opened", conf_file_path);
     } else {
         init();
         load(conf_file);
+        auto logger = spdlog::get("logger");
+        if (get_str("log_level") == "debug") {
+            logger->set_level(spdlog::level::debug);
+            logger->flush_on(spdlog::level::debug);
+        } else if (get_str("log_level") == "info") {
+            logger->set_level(spdlog::level::info);
+            logger->flush_on(spdlog::level::info);
+        } else {
+            logger->set_level(spdlog::level::err);
+            logger->flush_on(spdlog::level::err);
+        }
     }
 }
 

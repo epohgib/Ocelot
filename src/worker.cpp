@@ -20,7 +20,6 @@
 #include "site_comm.h"
 #include "response.h"
 #include "report.h"
-#include "user.h"
 
 std::mutex worker::client_len_mutex;
 
@@ -483,7 +482,7 @@ std::string worker::announce(
     const announce_context *ctx,
     uint32_t numwant,
     const addr_port &ap,
-    client_opts_t &client_opts
+    const client_opts_t &client_opts
 ) {
     std::chrono::steady_clock::time_point announce_begin = std::chrono::steady_clock::now();
 
@@ -493,12 +492,11 @@ std::string worker::announce(
     bool completed_torrent = false;  // Whether or not the current announcement is a snatch
     bool expire_token = false;       // Whether or not to expire a token after torrent completion
     bool peer_changed = false;       // Whether or not the peer is new or has changed since the last announcement
-    bool inc_l = false, inc_s = false, dec_l = false, dec_s = false;
     userid_t userid = u->get_id();
 
     logger->debug("announce: tor={} user={} up={} down={} left={} corrupt={}", tor.id, userid, ctx->uploaded, ctx->downloaded, ctx->left, ctx->corrupt);
 
-    xxh::hash3_state_t<64> state(xxh_seed);
+    xxh::hash_state_t<64> state(xxh_seed);
     state.update(peer_id);
     state.update(ap.addr_port, sizeof(ap.addr_port));
     state.update(&userid, sizeof(userid_t));
@@ -522,19 +520,11 @@ std::string worker::announce(
             // Check if peer is in seeders (e.g., seeder re-announcing with ctx->left > 0)
             peer_it = tor.seeders.find(peer_key);
             if (peer_it != tor.seeders.end()) {
-                // Move from seeders to leechers
-                p = &peer_it->second;
-                auto insert = tor.leechers.insert(std::pair<peerkey_t, peer>(peer_key, *p));
-                tor.seeders.erase(peer_it);
-                peer_it = insert.first;
+                peer_it = worker::move_seeder_to_leecher(tor, u, peer_it, peer_key);
                 peer_changed = true;
-                dec_s = true;
-                inc_l = true;
             } else {
-                // New peer
-                peer_it = add_peer(tor.leechers, peer_key);
+                peer_it = worker::add_leecher(tor, u, ap, peer_key);
                 inserted = true;
-                inc_l = true;
             }
         }
     } else if (completed_torrent) {
@@ -542,9 +532,8 @@ std::string worker::announce(
         if (peer_it == tor.leechers.end()) {
             peer_it = tor.seeders.find(peer_key);
             if (peer_it == tor.seeders.end()) {
-                peer_it = add_peer(tor.seeders, peer_key);
+                peer_it = worker::add_seeder(tor, u, ap, peer_key);
                 inserted = true;
-                inc_s = true;
             } else {
                 // Already a seeder, not a real completion
                 completed_torrent = false;
@@ -556,8 +545,7 @@ std::string worker::announce(
                 // Peer is in both lists (invalid state) - remove from seeders
                 // since they're completing as a leecher, they should only be in leechers
                 // until we move them to seeders below
-                tor.seeders.erase(seeder_it);
-                dec_s = true;
+                worker::remove_seeder(tor, u, seeder_it);
             }
         }
     } else {
@@ -565,18 +553,12 @@ std::string worker::announce(
         if (peer_it == tor.seeders.end()) {
             peer_it = tor.leechers.find(peer_key);
             if (peer_it == tor.leechers.end()) {
-                peer_it = add_peer(tor.seeders, peer_key);
+                peer_it = worker::add_seeder(tor, u, ap, peer_key);
                 inserted = true;
             } else {
-                // Move peer from leechers to seeders
-                p = &peer_it->second;
-                auto insert = tor.seeders.insert(std::pair<peerkey_t, peer>(peer_key, *p));
-                tor.leechers.erase(peer_it);
-                peer_it = insert.first;
+                peer_it = worker::move_leecher_to_seeder(tor, u, peer_it, peer_key);
                 peer_changed = true;
-                dec_l = true;
             }
-            inc_s = true;
         }
     }
     p = &peer_it->second;
@@ -646,213 +628,164 @@ std::string worker::announce(
             } else if (tor.free_torrent == FREE || sit != tor.tokened_users.end()) {
                 if (sit != tor.tokened_users.end()) {
                     expire_token = true;
-                    std::stringstream record;
-                    record << '(' << userid << ',' << tor.id << ',' << downloaded_change << ')';
-                    std::string record_str = record.str();
-                    db->record_token(record_str);
+                    db->record_token(userid, tor.id, downloaded_change);
                 }
                 downloaded_change = 0;
             }
 
             if (uploaded_change || downloaded_change) {
-                std::stringstream record;
-                record << '(' << userid << ',' << uploaded_change << ',' << downloaded_change << ')';
-                std::string record_str = record.str();
-                db->record_user(record_str);
+                db->record_user(userid, uploaded_change, downloaded_change);
             }
         }
     }
     p->left = ctx->left;
 
-    if (inserted || memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0) {
+    // Update the remote address if their ISP reassigned a new address in the interval
+    if (memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0) {
         p->ap = ap;
     }
 
     // Update the peer
     p->last_announced = cur_time;
-    p->visible = p->left == 0 || u->can_leech();
 
     // Add peer data to the database
     if (peer_changed) {
         db->record_peer(
-            fmt::format(
-                "({},{},{},"
-                "{},{},{},{},{},{},"
-                "{},{},"
-                "{}",
-                userid, tor.id, active,
-                ctx->uploaded, ctx->downloaded, upspeed, downspeed, ctx->left, ctx->corrupt,
-                cur_time - p->first_announced, p->announces,
-                u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')'
-            ),
-            peer_id,
-            ctx->useragent
+            userid, tor.id, active,
+            ctx->uploaded, ctx->downloaded, upspeed, downspeed, ctx->left, ctx->corrupt,
+            cur_time - p->first_announced, p->announces,
+            u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')',
+            peer_id, ctx->useragent
         );
     } else {
         db->record_peer(
-            fmt::format(
-                "({},{},{},{},",
-                userid, tor.id, cur_time - p->first_announced, p->announces
-            ),
-            peer_id
+            userid, tor.id, cur_time - p->first_announced, p->announces, peer_id
         );
     }
 
     if (ctx->event_stopped) {
         numwant = 0;
-        if (ctx->left > 0) {
-            dec_l = true;
-        } else {
-            dec_s = true;
-        }
+    } else if (ctx->left > 0 &&!u->can_leech() ) {
+        numwant = 0;
     } else if (completed_torrent) {
         update_torrent = true;
         tor.completed++;
 
         db->record_snatch(
-            fmt::format(
-                "({},{},{},{})",
-                userid,
-                tor.id,
-                cur_time,
-                u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')'
-            )
+            userid,
+            tor.id,
+            u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')'
         );
 
         // User is a seeder now!
         if (!inserted) {
-            auto insert = tor.seeders.insert(std::pair<peerkey_t, peer>(peer_key, *p));
-            tor.leechers.erase(peer_it);
-            peer_it = insert.first;
-            p = &peer_it->second;
-            dec_l = true;
-            // Only increment seeders if we actually inserted (not if key already existed)
-            if (insert.second) {
-                inc_s = true;
-            }
+            p = worker::insert_seeder(tor, u, peer_it, peer_key);
         }
         if (expire_token) {
             s_comm->expire_token(tor.id, userid);
             tor.tokened_users.erase(userid);
         }
-    } else if (!u->can_leech() && ctx->left > 0) {
-        numwant = 0;
     }
 
     std::string peers;
     if (numwant > 0) {
-        peers.reserve(numwant*6);
-        unsigned int found_peers = 0;
-        if (ctx->left > 0) {  // Show seeders to leechers first
-            if (tor.seeders.size() > 0) {
-                // We do this complicated stuff to cycle through the seeder list,
-                // so all seeders will get shown to leechers
-
-                // Find out where to begin in the seeder list
-                peer_list::const_iterator i;
-                if (tor.last_selected_seeder == 0) {
-                    i = tor.seeders.begin();
-                } else {
-                    i = tor.seeders.find(tor.last_selected_seeder);
-                    if (i == tor.seeders.end() || ++i == tor.seeders.end()) {
-                        i = tor.seeders.begin();
+        logger->debug(
+            "announce: tor={} user={} left={} want={}",
+            tor.id, userid, ctx->left, numwant
+        );
+        peers.reserve(numwant * sizeof(ap.addr_port));
+        if (ctx->left > 0) {
+            // first show  seeders to a leecher
+            if (tor.seeders.size() <= numwant) {
+                // send all of them
+                numwant -= tor.seeders.size();
+                for (const auto &it : tor.seeders) {
+                    auto user = it.second.user;
+                    logger->debug(
+                        "announce: tor={} user={} direct seeder={}",
+                        tor.id, userid, user->get_id()
+                    );
+                    if (
+                        !user->is_deleted()
+                        && !user->is_protected()
+                        && user->get_id() != userid
+                    ) {
+                        peers.append(it.second.ap.addr_port, sizeof(ap.addr_port));
                     }
                 }
-
-                // Find out where to end in the seeder list
-                peer_list::const_iterator end;
-                if (i == tor.seeders.begin()) {
-                    end = tor.seeders.end();
-                } else {
-                    end = i;
-                    if (--end == tor.seeders.begin()) {
-                        ++end;
-                        ++i;
+            } else {
+                // round-robin selection of least recently offered seeders
+                auto it = tor.seeders.upper_bound(tor.last_selected_seeder);
+                auto start = it;
+                while (numwant > 0) {
+                    if (it == tor.seeders.end()) {
+                        it = tor.seeders.begin();
                     }
-                }
-
-                // Add seeders
-                while (i != end && found_peers < numwant) {
-                    if (i == tor.seeders.end()) {
-                        i = tor.seeders.begin();
+                    logger->debug(
+                        "announce: tor={} user={} round-robin seeder={}",
+                        tor.id, userid, it->second.user->get_id()
+                    );
+                    if (
+                        !it->second.user->is_deleted()
+                        && !it->second.user->is_protected()
+                        && it->second.user->get_id() != userid
+                    ) {
+                        peers.append(it->second.ap.addr_port, sizeof(ap.addr_port));
+                        tor.last_selected_seeder = it->first;
+                        --numwant;
                     }
-                    // Don't show users themselves
-                    if (i->second.user->is_deleted() || i->second.user->get_id() == userid || !i->second.visible) {
-                        ++i;
-                        continue;
+                    if (++it == start) {
+                        break; // wrapped around: no more seeders available
                     }
-                    peers.append(i->second.ap.addr_port, sizeof(ap.addr_port));
-                    tor.last_selected_seeder = i->first;
-                    ++found_peers;
-                    ++i;
                 }
             }
-
-            if (found_peers < numwant && tor.leechers.size() > 1) {
-                for (peer_list::const_iterator i = tor.leechers.begin(); i != tor.leechers.end() && found_peers < numwant; ++i) {
-                    // Don't show users themselves or leech disabled users
-                    if (i->second.user->is_deleted() || i->second.user->get_id() == userid || !i->second.visible) {
-                        continue;
-                    }
-                    peers.append(i->second.ap.addr_port, sizeof(ap.addr_port));
-                    ++found_peers;
-                }
-
-            }
-        } else if (tor.leechers.size() > 0) {
-            // User is a seeder, and we have leechers!
-            for (peer_list::const_iterator i = tor.leechers.begin(); i != tor.leechers.end() && found_peers < numwant; ++i) {
+        }
+        // whether client is leecher or seeder,
+        // add leechers until we have a full complement of peers
+        if (numwant > 0 && !tor.leechers.empty()) {
+            peer_list::const_iterator it = tor.leechers.begin();
+            while (numwant > 0 && it != tor.leechers.end()) {
+                logger->debug(
+                    "announce: tor={} user={} leecher={}",
+                    tor.id, userid, it->second.user->get_id()
+                );
                 // Don't show users themselves or leech disabled users
-                if (i->second.user->get_id() == userid || !i->second.visible) {
-                    continue;
+                if (
+                    !it->second.user->is_deleted()
+                    && it->second.user->can_leech()
+                    && it->second.user->get_id() != userid
+                ) {
+                    peers.append(it->second.ap.addr_port, sizeof(ap.addr_port));
+                    --numwant;
                 }
-                peers.append(i->second.ap.addr_port, sizeof(ap.addr_port));
-                ++found_peers;
+                ++it;
             }
         }
     }
 
     // Update the stats
     stats.succ_announcements++;
-    if (dec_l || dec_s || inc_l || inc_s) {
-        if (inc_l) {
-            p->user->incr_leeching();
-            stats.leechers++;
-        }
-        if (inc_s) {
-            p->user->incr_seeding();
-            stats.seeders++;
-        }
-        if (dec_l) {
-            p->user->decr_leeching();
-            stats.leechers--;
-        }
-        if (dec_s) {
-            p->user->decr_seeding();
-            stats.seeders--;
-        }
-    }
 
-    // Correct the stats for the old user if the peer's user link has changed
+    // Correct the stats for the old user if the peer's user link has changed (really?)
     if (p->user != u) {
-        if (!ctx->event_stopped) {
-            if (ctx->left > 0) {
-                u->incr_leeching();
-                p->user->decr_leeching();
-            } else {
-                u->incr_seeding();
-                p->user->decr_seeding();
-            }
-        }
+        // How often does this happen?
+        logger->error(
+            "peer user changed from {} to {} via {}:{}",
+            p->user->get_id(), u->get_id(), ap.addr, ap.port
+        );
         p->user = u;
     }
 
-    // Delete peers as late as possible to prevent access problems
+    // Remove peers as late as possible to prevent access problems.
     if (ctx->event_stopped) {
         if (ctx->left > 0) {
             tor.leechers.erase(peer_it);
+            stats.leechers--;
+            u->decr_leeching();
         } else {
             tor.seeders.erase(peer_it);
+            stats.seeders--;
+            u->decr_seeding();
         }
     }
 
@@ -860,10 +793,7 @@ std::string worker::announce(
     if (update_torrent || tor.last_flushed + 3600 < cur_time) {
         tor.last_flushed = cur_time;
         db->record_torrent(
-            fmt::format(
-                "({},{},{},{},{})",
-                tor.id, tor.seeders.size(), tor.leechers.size(), (completed_torrent ? 1 : 0), tor.balance
-            )
+            tor.id, tor.seeders.size(), tor.leechers.size(), (completed_torrent ? 1 : 0), tor.balance
         );
     }
 
@@ -876,26 +806,22 @@ std::string worker::announce(
         return error("Access denied, leeching forbidden", client_opts);
     }
 
-    std::string output = "d8:completei";
+    std::string output;
     output.reserve(350);
-    output += std::to_string(tor.seeders.size())
-        + "e10:downloadedi"
-        + std::to_string(tor.completed)
-        + "e10:incompletei"
-        + std::to_string(tor.leechers.size())
-        + "e8:intervali"
-        + std::to_string(announce_interval + jitter(randgen))
-        + "e12:min intervali"
-        + std::to_string(announce_interval)
-        + "e5:peers";
-    if (peers.length() == 0) {
-        output += "0:";
-    } else {
-        output += std::to_string(peers.length());
-        output += ":";
-        output += peers;
-    }
-    output += 'e';
+    fmt::format_to(std::back_inserter(output),
+        "d8:completei{}"
+        "e10:downloadedi{}"
+        "e10:incompletei{}"
+        "e8:intervali{}"
+        "e12:min intervali{}"
+        "e5:peers{}:{}e",
+        tor.seeders.size(),
+        tor.completed,
+        tor.leechers.size(),
+        announce_interval + jitter(randgen),
+        announce_interval,
+        peers.length(), peers
+    );
     logger->debug("announce: tor={} user={} peer({}) response({})", tor.id, userid, bintohex(peers), output);
 
     /* gzip compression actually makes announce returns larger from our
@@ -915,10 +841,11 @@ std::string worker::announce(
 }
 
 std::string worker::scrape(const std::list<std::string> &infohashes, params_type &headers, client_opts_t &client_opts) {
-    std::string output = "d5:filesd";
+    std::string output;
+    output.reserve(300);
+    output= "d5:filesd";
     for (std::list<std::string>::const_iterator i = infohashes.begin(); i != infohashes.end(); ++i) {
-        std::string infohash = *i;
-        infohash = hex_decode(infohash);
+        std::string infohash(hex_decode(*i));
 
         torrent_list::iterator tor = torrents_list.find(infohash);
         if (tor == torrents_list.end()) {
@@ -926,16 +853,16 @@ std::string worker::scrape(const std::list<std::string> &infohashes, params_type
         }
         torrent *t = &(tor->second);
 
-        output += std::to_string(infohash.length())
-            + ':'
-            + infohash
-            + "d8:completei"
-            + std::to_string(t->seeders.size())
-            + "e10:incompletei"
-            + std::to_string(t->leechers.size())
-            + "e10:downloadedi"
-            + std::to_string(t->completed)
-            + "ee";
+        output += fmt::format(
+            "{}:{}"
+            "d8:completei{}"
+            "e10:incompletei{}"
+            "e10:downloadedi{}ee",
+            infohash.length(), infohash,
+            t->seeders.size(),
+            t->leechers.size(),
+            t->completed
+        );
     }
     output += "ee";
     if (headers["accept-encoding"].find("gzip") != std::string::npos) {
@@ -1211,10 +1138,66 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
     return http_response("success", client_opts);
 }
 
+/*
 peer_list::iterator worker::add_peer(peer_list &peer_list, const peerkey_t &peer_key) {
     peer new_peer;
     auto it = peer_list.insert(std::pair<peerkey_t, peer>(peer_key, new_peer));
     return it.first;
+}
+*/
+
+peer_list::iterator worker::add_leecher(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key) {
+    auto insert = tor.leechers.insert({peer_key, peer(u, ap)});
+    stats.leechers++;
+    u->incr_leeching();
+    return insert.first;
+}
+
+peer_list::iterator worker::add_seeder(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key) {
+    auto insert = tor.seeders.insert({peer_key, peer(u, ap)});
+    stats.seeders++;
+    u->incr_seeding();
+    return insert.first;
+}
+
+peer_list::iterator worker::move_seeder_to_leecher(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key) {
+    auto insert = tor.leechers.insert({peer_key, peer_it->second});
+    tor.seeders.erase(peer_it);
+    stats.leechers++;
+    stats.seeders--;
+    u->incr_leeching();
+    u->decr_seeding();
+    return insert.first;
+}
+
+peer_list::iterator worker::move_leecher_to_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key) {
+    auto insert = tor.seeders.insert({peer_key, peer_it->second});
+    tor.leechers.erase(peer_it);
+    stats.leechers--;
+    stats.seeders++;
+    u->decr_leeching();
+    u->incr_seeding();
+    return insert.first;
+}
+
+peer* worker::insert_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key) {
+    auto insert = tor.seeders.insert({peer_key, peer_it->second});
+    tor.leechers.erase(peer_it);
+    peer_it = insert.first;
+    stats.leechers--;
+    u->decr_leeching();
+    // Only increment seeders if we actually inserted (not if key already existed)
+    if (insert.second) {
+        stats.seeders++;
+        u->incr_seeding();
+    }
+    return &peer_it->second;
+}
+
+void worker::remove_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it) {
+    tor.seeders.erase(peer_it);
+    stats.seeders--;
+    u->decr_seeding();
 }
 
 void worker::start_reaper() {
@@ -1280,10 +1263,9 @@ void worker::reap_peers() {
                 }
             }
             if (reaped_this && t->second.seeders.empty() && t->second.leechers.empty()) {
-                std::stringstream record;
-                record << '(' << t->second.id << ",0,0,0," << t->second.balance << ')';
-                std::string record_str = record.str();
-                db->record_torrent(record_str);
+                db->record_torrent(
+                    t->second.id, 0, 0, 0, t->second.balance
+                );
                 cleared_torrents++;
             }
         }
@@ -1308,11 +1290,11 @@ void worker::reap_peers() {
 
     logger->info(
         "reaped {} leechers and {} seeders in {}us,"
-        " lock acquired in {}us, torrents scanned: {},"
-        " reset {} (adjusted seeders: {} => {}, leechers: {} => {})",
+        " lock acquired in {}us, torrents scanned: {}, reset {}"
+        " (adjusted seeders: {} => {}, leechers: {} => {})",
         reaped_leecher, reaped_seeder, reap_duration.count(),
-        lock_duration.count(), cleared_torrents,
-        total_torrent, old_seed, total_seeder, old_leech, total_leecher
+        lock_duration.count(), total_torrent, cleared_torrents,
+        old_seed, total_seeder, old_leech, total_leecher
     );
 }
 

@@ -46,9 +46,11 @@ docker run -v $(pwd)/ocelot.conf:/srv/ocelot.conf ocelot
 
 ### Standalone Installation
 
-* Prepare the build environment. (This must be re-executed when new source files or libraries are added).
+* Build the binary
 
-        cmake . -B build
+        cmake . -B build && make -C build
+
+(Technically there is no need to run cmake if there are no library changes, but it is instant).
 
 * Create the following tables according to the [Gazelle database schema](https://raw.githubusercontent.com/WhatCD/Gazelle/master/gazelle.sql):
  - `torrents`
@@ -61,10 +63,6 @@ docker run -v $(pwd)/ocelot.conf:/srv/ocelot.conf ocelot
  - `xbt_snatched`
 
 * Edit `ocelot.conf` to your liking.
-
-* Build Ocelot:
-
-        make -C build
 
 ## Running Ocelot
 

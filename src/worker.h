@@ -31,7 +31,7 @@ typedef struct {
 } announce_context;
 
 class worker {
- private:
+  private:
     config * conf;
     mysql * db;
     site_comm * s_comm;
@@ -64,11 +64,18 @@ class worker {
 
     static std::string get_del_reason(int code);
 
+    static peer_list::iterator add_leecher(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key);
+    static peer_list::iterator add_seeder(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key);
+    static peer_list::iterator move_seeder_to_leecher(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key);
+    static peer_list::iterator move_leecher_to_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key);
+    static peer* insert_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key);
+    static void remove_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it);
+
  public:
     worker(config * conf_obj, torrent_list &torrents, user_list &users, std::vector<std::string> &_whitelist, mysql * db_obj, site_comm * sc);
     void reload_config(config * conf);
     std::string work(const std::string &input, uint32_t remote_addr, client_opts_t &client_opts);
-    std::string announce(const std::string &peer_id, torrent &tor, user_ptr &u, const announce_context *ctx, uint32_t numwant, const addr_port &ap, client_opts_t &client_opts);
+    std::string announce(const std::string &peer_id, torrent &tor, user_ptr &u, const announce_context *ctx, uint32_t numwant, const addr_port &ap, const client_opts_t &client_opts);
     std::string scrape(const std::list<std::string> &infohashes, params_type &headers, client_opts_t &client_opts);
     std::string update(params_type &params, const client_opts_t &client_opts);
 

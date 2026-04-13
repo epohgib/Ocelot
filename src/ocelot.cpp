@@ -148,9 +148,16 @@ int main(int argc, char **argv) {
     }
 
     auto combined_logger = std::make_shared<spdlog::logger>("logger", begin(sinks), end(sinks));
-    // If we don't set flush on info, the file log takes a long while to actually flush
-    combined_logger->set_level(spdlog::level::info);
-    combined_logger->flush_on(spdlog::level::info);
+    if (conf->get_str("log_level") == "debug") {
+        combined_logger->set_level(spdlog::level::debug);
+        combined_logger->flush_on(spdlog::level::debug);
+    } else if (conf->get_str("log_level") == "info") {
+        combined_logger->set_level(spdlog::level::info);
+        combined_logger->flush_on(spdlog::level::info);
+    } else {
+        combined_logger->set_level(spdlog::level::err);
+        combined_logger->flush_on(spdlog::level::err);
+    }
     combined_logger->info(
         "Ocelot version " OCELOT_VERSION ", compiled " __DATE__ " "  __TIME__
     );

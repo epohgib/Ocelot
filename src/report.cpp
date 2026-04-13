@@ -23,7 +23,6 @@
 #include "jemalloc_parse.h"
 #include "report.h"
 #include "response.h"
-#include "user.h"
 
 int jemalloc_fd;
 std::mutex jemalloc_fd_mutex;

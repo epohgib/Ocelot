@@ -6,8 +6,8 @@
 #define OCELOT_VERSION_MAJOR 3
 #define OCELOT_VERSION_MINOR 1
 #define OCELOT_VERSION_BUGFIX 0
-#define OCELOT_VERSION_NREV 3
-#define OCELOT_VERSION "3.1.0-3"
+#define OCELOT_VERSION_NREV 0
+#define OCELOT_VERSION "3.1.0"
 
 #include <time.h>
 
@@ -19,36 +19,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "xxhash.hpp"
+#include "peer.h"
 
 typedef uint32_t torid_t;
-typedef uint32_t userid_t;
 typedef xxh::hash_t<64> peerkey_t;
-
-class user;
-typedef std::shared_ptr<user> user_ptr;
-
-typedef union {
-    struct {
-        uint32_t addr;
-        uint16_t port;
-    };
-    char addr_port[sizeof(uint32_t) + sizeof(uint16_t)];
-} addr_port;
-
-typedef struct {
-    user_ptr user;
-    int64_t uploaded;
-    int64_t downloaded;
-    int64_t corrupt;
-    int64_t left;
-    time_t last_announced;
-    time_t first_announced;
-    uint32_t announces;
-    addr_port ap;
-    bool visible;
-} peer;
-
 typedef std::map<peerkey_t, peer> peer_list;
 
 enum freetype { NORMAL, FREE, NEUTRAL };
