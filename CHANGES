@@ -1,17 +1,20 @@
--- 3.1.0 (2026-03-28)
+-- 3.1.0 (2026-04-13)
 FEATURES
 * Ocelot now uses remote address of listen socket or X-Forwarded-For header as IP source.
 * Introduce an --ignore-xff flag to override the reading of said header.
 * IP addresses are maintained as 32bit ints internally rather than strings. This slims down the peer struct.
-* Peer keys are now hashed to a 64-bit value using the xxhash3 algorithm, removing further bloat from the peer struct.
-* Ocelot used to "DELETE FROM torrents WHERE info_hash = ''". This no longer happens.
+* Peer keys are now hashed to a 64-bit value using the xxhash algorithm, removing further bloat from the peer struct.
+* Revamp how seeders and leechers are tracked per torrent.
+* Simplify how peers are selected.
 * Improved consistency of logging messages.
-* Removed hand-rolled inttostr()
+* Removed hand-rolled inttostr().
 * Added const to methods and parameters where possible, some methods were made static. (cppcheck)
-* Added a report torrent endpoint (using libfmt)
-* Reduce memory reallocations in building db buffers
+* Added a report torrent endpoint (using libfmt).
+* Reduce memory reallocations in building db buffers.
+* Log level (error, info, debug) can be configured.
 BUGFIXES
 * When inserting a new torrent, set last_flushed to 0.
+* Ocelot used to "DELETE FROM torrents WHERE info_hash = ''". This no longer happens.
 
 -- 3.0.0 (2026-02-15)
 BUILD
