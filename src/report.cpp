@@ -293,7 +293,7 @@ std::string report_torrent(const torrent &t) {
         t.balance,
         t.last_flushed,
         t.last_selected_seeder,
-        t.free_torrent
+        static_cast<int>(t.free_torrent)
     );
     int n = 0;
     for (auto peer : t.leechers) {
