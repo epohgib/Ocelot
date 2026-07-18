@@ -9,6 +9,8 @@ max_read_buffer     = 4096
 connection_timeout  = 10
 # Keepalive is mostly useful if the tracker runs behind reverse proxies
 keepalive_timeout   = 0
+daemonize           = false
+ignore_xff          = false
 
 announce_interval   = 1800
 announce_jitter     = 240
@@ -25,6 +27,9 @@ mysql_db            = gazelle
 # The passwords must be 32 characters and match the Gazelle config
 report_password     = 00000000000000000000000000000000
 site_password       = 00000000000000000000000000000000
+site_host           = 127.0.0.1
+site_service        = http
+site_path           =
 
 peers_timeout       = 7200
 del_reason_lifetime = 86400
@@ -32,6 +37,7 @@ reap_peers_interval = 1800
 schedule_interval   = 3
 
 log                 = false
+log_level           = err
 log_path            = /tmp/ocelot
 
 # the report path should be placed on a tmpfs partition in production

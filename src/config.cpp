@@ -84,7 +84,6 @@ void config::init() {
     add("mysql_port", 3306u);
     add("mysql_username", "");
     add("mysql_password", "");
-    add("mysql_port", 3306u);
 
     // Site communication
     add("site_host", "127.0.0.1");
