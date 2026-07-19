@@ -66,12 +66,12 @@ void site_comm::flush_tokens()
     if (verbose_flush || qsize > 0) {
         logger->info("Token expire queue size: " + std::to_string(qsize));
     }
-    if (expire_token_buffer.empty()) {
-        return;
+    if (!expire_token_buffer.empty()) {
+        token_queue.push(expire_token_buffer);
+        expire_token_buffer.clear();
     }
-    token_queue.push(expire_token_buffer);
-    expire_token_buffer.clear();
-    if (!t_active) {
+    if (!t_active && !token_queue.empty()) {
+        t_active = true;
         std::thread thread(&site_comm::do_flush_tokens, this);
         thread.detach();
     }
@@ -79,7 +79,6 @@ void site_comm::flush_tokens()
 
 void site_comm::do_flush_tokens()
 {
-    t_active = true;
     try {
         while (token_queue.size() > 0) {
             boost::asio::io_context io_context;
@@ -131,6 +130,8 @@ void site_comm::do_flush_tokens()
         }
     } catch (std::exception &er) {
         logger->error("Exception: " + std::string(er.what()));
+    } catch (...) {
+        logger->error("Unknown exception in do_flush_tokens");
     }
     t_active = false;
 }
