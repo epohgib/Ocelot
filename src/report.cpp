@@ -228,7 +228,7 @@ std::string report_prom_stats(const char *jemalloc_stats) {
         "jemalloc_nflush_total{bucket=\"small\"} " << ji.small.nflush_total << "\n"
         "jemalloc_nflush_total{bucket=\"large\"} " << ji.large.nflush_total << "\n"
 
-        "#TYPE jemalloc_nflush_total gauge\n"
+        "#TYPE jemalloc_memory gauge\n"
         "jemalloc_memory{global=\"allocated\"} " << ji.mem_allocated << "\n"
         "jemalloc_memory{global=\"active\"} "    << ji.mem_active << "\n"
         "jemalloc_memory{global=\"metadata\"} "  << ji.mem_metadata << "\n"
@@ -236,23 +236,19 @@ std::string report_prom_stats(const char *jemalloc_stats) {
         "jemalloc_memory{global=\"mapped\"} "   << ji.mem_mapped << "\n"
         "jemalloc_memory{global=\"retained\"} "  << ji.mem_retained << "\n"
 
-        "#TYPE jemalloc_nflush_rate gauge\n"
-        "jemalloc_allocated{bucket=\"small\"} " << ji.small.allocated << "\n"
-        "jemalloc_allocated{bucket=\"large\"} " << ji.large.allocated << "\n"
-
-        "#TYPE jemalloc_nflush_rate gauge\n"
+        "#TYPE jemalloc_nmalloc_rate gauge\n"
         "jemalloc_nmalloc_rate{bucket=\"small\"} " << ji.small.nmalloc_rate << "\n"
         "jemalloc_nmalloc_rate{bucket=\"large\"} " << ji.large.nmalloc_rate << "\n"
 
-        "#TYPE jemalloc_nflush_total gauge\n"
+        "#TYPE jemalloc_ndalloc_rate gauge\n"
         "jemalloc_ndalloc_rate{bucket=\"small\"} " << ji.small.ndalloc_rate << "\n"
         "jemalloc_ndalloc_rate{bucket=\"large\"} " << ji.large.ndalloc_rate << "\n"
 
-        "#TYPE jemalloc_nflush_rate gauge\n"
+        "#TYPE jemalloc_nrequests_rate gauge\n"
         "jemalloc_nrequests_rate{bucket=\"small\"} " << ji.small.nrequests_rate << "\n"
         "jemalloc_nrequests_rate{bucket=\"large\"} " << ji.large.nrequests_rate << "\n"
 
-        "#TYPE jemalloc_nflush_rate gauge\n"
+        "#TYPE jemalloc_fill_rate gauge\n"
         "jemalloc_fill_rate{bucket=\"small\"} " << ji.small.nfill_rate << "\n"
         "jemalloc_fill_rate{bucket=\"large\"} " << ji.large.nfill_rate << "\n"
 
