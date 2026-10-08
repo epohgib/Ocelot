@@ -13,6 +13,7 @@ FEATURES
 * Reduce memory reallocations in building db buffers.
 * Log level (error, info, debug) can be configured.
 BUGFIXES
+* A peer re-announcing from a new address is no longer counted as an additional peer. This fixes inflated seeders/leechers counts in torrents_leech_stats.
 * When inserting a new torrent, set last_flushed to 0.
 * Ocelot used to "DELETE FROM torrents WHERE info_hash = ''". This no longer happens.
 

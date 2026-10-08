@@ -498,7 +498,6 @@ std::string worker::announce(
 
     xxh::hash_state_t<64> state(xxh_seed);
     state.update(peer_id);
-    state.update(ap.addr_port, sizeof(ap.addr_port));
     state.update(&userid, sizeof(userid_t));
     const peerkey_t peer_key = state.digest();
 
@@ -643,6 +642,7 @@ std::string worker::announce(
     // Update the remote address if their ISP reassigned a new address in the interval
     if (memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0) {
         p->ap = ap;
+        peer_changed = true;  // Force the full db record so the new address is stored
     }
 
     // Update the peer
