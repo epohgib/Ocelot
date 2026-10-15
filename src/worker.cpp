@@ -380,10 +380,12 @@ std::string worker::work(const std::string &input, uint32_t remote_addr, client_
             }
             struct sockaddr_in sa;
             if (!inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr))) {
+                // Keep the raw value out of the response, but log it so the
+                // offending proxy/header can still be diagnosed.
+                logger->error("unparseable X-Forwarded-For: {}", bintohex(ip));
                 return error(
-                    "failed to parse X-Forwarded-For: "
-                    // we received garbage, so avoid pwning anybody
-                    + bintohex(ip),
+                    "Tracker could not parse your X-Forwarded-For address "
+                    "(IPv6 is not supported); please connect to the tracker over IPv4.",
                     client_opts
                 );
             };
