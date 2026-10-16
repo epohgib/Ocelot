@@ -206,7 +206,7 @@ std::string worker::work(const std::string &input, uint32_t remote_addr, client_
     bool found_data = false;
 
     for (; pos < input_length; ++pos) {
-        if (input[pos] == ':') {
+        if (parsing_key && input[pos] == ':') {
             parsing_key = false;
             ++pos;  // skip space after :
         } else if (input[pos] == '\n' || input[pos] == '\r') {
