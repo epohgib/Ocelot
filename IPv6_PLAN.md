@@ -23,7 +23,7 @@ copy — see §11):
 - Luminance, site: https://github.com/Empornium/Luminance (`23b568c1`,
   v0.6.0) — Gazelle fork, companion of Radiance.
 
-All decisions D1–D20 are made in this document. N1–N4 follow Empornium:
+All decisions D1–D22 are made in this document. N1–N4 follow Empornium:
 binary/CIDR IP model, `user_seedbox` dropped, IPv6 anti-cheat
 implemented, tracker and site changed together and staged (§5, §7, §10).
 
@@ -145,6 +145,26 @@ Rules:
 - On parse failure: log a warning and keep the socket address. Never a
   fatal error.
 - **Never** apply `hex_decode()` to an IP.
+
+### 4.1.1 Real client IP in our deployment (Cloudflare)
+
+Production sits behind Cloudflare, which terminates IPv6 and forwards to
+the origin over IPv4 (the origin has IPv6 switched off by choice).
+Consequences:
+
+- The client's IPv6 address reaches the tracker **through the header**,
+  not the socket, so the feature works without enabling IPv6 on the
+  origin.
+- Cloudflare sets `CF-Connecting-IP` to the client address and **appends**
+  the client address to any client-supplied `X-Forwarded-For`. Taking
+  XFF's first token is therefore spoofable. The tracker should read a
+  configurable header (Radiance's `real_ip_header`, commit `23f039c`) and
+  production should use `CF-Connecting-IP` (see §10 P1).
+- `ignore_xff` must stay `false`, otherwise the tracker records the proxy
+  address instead of the client's.
+- The announce endpoint must be reached on a Cloudflare-proxied port
+  (80/443/…), not a DNS-only custom port; otherwise IPv6 clients connect
+  straight to the IPv4-only origin and fail.
 - The address string handed to the worker carries its family explicitly
   (§4.8), so `worker::work` does not have to guess.
 
@@ -192,16 +212,26 @@ bool ipv4_is_public(in_addr addr);   // 10/8, 172.16/12, 192.168/16, 169.254/16,
 bool ipv6_is_public(in6_addr addr);
 ```
 
-IPv4 ranges (as Radiance, already correct):
+IPv4 ranges (Radiance's, extended with documentation, this-network,
+multicast and reserved ranges — a deliberate divergence from Radiance,
+which checks none of them; without them a proxy forwarding e.g.
+`203.0.113.50` would record a Documentation address as a routable peer,
+breaking the symmetry with `2001:db8::/32` in IPv6):
 
 | Range | Reason |
 |---|---|
+| `0.0.0.0/8` | this-network |
 | `10.0.0.0/8` | private |
-| `172.16.0.0/12` | private |
-| `192.168.0.0/16` | private |
-| `169.254.0.0/16` | link-local |
 | `100.64.0.0/10` | CGNAT |
 | `127.0.0.0/8` | loopback |
+| `169.254.0.0/16` | link-local |
+| `172.16.0.0/12` | private |
+| `192.0.2.0/24` | documentation (TEST-NET-1) |
+| `192.168.0.0/16` | private |
+| `198.51.100.0/24` | documentation (TEST-NET-2) |
+| `203.0.113.0/24` | documentation (TEST-NET-3) |
+| `224.0.0.0/4` | multicast |
+| `240.0.0.0/4` | reserved (incl. limited broadcast) |
 
 IPv6 ranges, matched on the leading bytes of `s6_addr` (portable; do
 **not** use `s6_addr32`/`s6_addr16`, which are glibc extensions):
@@ -237,16 +267,16 @@ textual `ip` column is kept during the transition.
 `xbt_files_users`:
 
 ```sql
-`ipv4` varbinary(4)  DEFAULT NULL,   -- 4 bytes of in_addr,   network order
-`ipv6` varbinary(16) DEFAULT NULL,   -- 16 bytes of in6_addr, network order
+`ipv4` varbinary(4)  NOT NULL DEFAULT '',   -- 4 bytes of in_addr,   network order
+`ipv6` varbinary(16) NOT NULL DEFAULT '',   -- 16 bytes of in6_addr, network order
 `port` int(6) NOT NULL DEFAULT 0,    -- the site connectability checker needs it
 ```
 
 `xbt_snatched`, which also becomes **unique per `(uid, fid)`** (D20):
 
 ```sql
-`ipv4` varbinary(4)  DEFAULT NULL,
-`ipv6` varbinary(16) DEFAULT NULL,
+`ipv4` varbinary(4)  NOT NULL DEFAULT '',
+`ipv6` varbinary(16) NOT NULL DEFAULT '',
 PRIMARY KEY (`uid`, `fid`),
 ```
 
@@ -285,6 +315,16 @@ absent (`u->is_protected()` → both empty). Same injection-safety model
 as today's `inet_ntoa(...)` expression: only validated bytes are
 formatted, never user text.
 
+**Decision (D22, absent-address model):** an absent address is the
+empty string, **not** NULL. The binary columns are `NOT NULL DEFAULT
+''` — the Luminance model — and `record_peer`/`record_snatch` already
+emit `''` when a family is absent, so the site's `IF(xu.ipv6 = '', ...)`
+queries (§7.2) work without `COALESCE` and no NULL can reach the
+reader. The legacy textual `ip`/`IP` columns cannot hold IPv6: during
+stage 1 they receive the **IPv4 in dotted form when the peer has one,
+`''` when it does not**; a v6-only peer therefore has `ip = ''` and a
+populated `ipv6` until stage 2 drops the legacy columns.
+
 ### 4.5 Per-user opt-in: `track_ipv6`
 
 `users_main.track_ipv6 TINYINT(1) NOT NULL DEFAULT 0`. Default 0:
@@ -297,9 +337,33 @@ existing users are not tracked on IPv6 until they opt in.
   `update_user` API action (`worker.cpp:1062-1098`), extended with a
   `track_ipv6` parameter; `add_user` (`worker.cpp:1017-1030`) defaults it
   to false.
-- Worker: after validation, `if (!u->track_ipv6()) ipv6.clear();`. A peer
-  whose owner has not opted in is never recorded on IPv6, and its IPv6 is
-  never offered to others (§4.7).
+- Worker: the `worker::announce` pipeline is **parse → validate (drop
+  invalid values individually) → emptiness check → opt-in clearing**,
+  i.e. the emptiness check runs against the addresses that survive both
+  validation and the simulated `track_ipv6` clearing, and
+  `if (!u->track_ipv6()) ipv6.clear();` is applied last. A peer whose
+  owner has not opted in is never recorded on IPv6, its IPv6 is never
+  offered to others (§4.7), and no address-less peer is ever created
+  (D21).
+
+**Decision (D21, validation order):** the checks are ordered so that an
+opt-out can never produce a broken peer:
+
+- a dual-stack client with opt-in 0 keeps working over IPv4: only its
+  IPv6 address is dropped, `has_ipv4` stays true;
+- a client whose **only** routable address is IPv6 and who has not
+  opted in cannot be tracked at all — it is rejected with a dedicated
+  client error (`IPv6 tracking is disabled for your account; enable it
+  in your profile`), never the generic `Invalid IP detected` and never
+  as a silent address-less peer (which would confuse the compact
+  output, the stats and the site reads);
+- the generic `error("Invalid IP detected")` remains only for a client
+  whose addresses are all invalid (§5, Commit 5 test).
+
+Implementable as: validate both families; simulate the `track_ipv6`
+clearing; if no address survives, reject — with the dedicated opt-in
+error if the IPv6 family was the only *valid public* address (dropped
+solely by opt-in), with `Invalid IP detected` otherwise.
 
 **Decision (default timing):** explicit opt-in for **both** existing and
 new users (site default 0). Conservative and GDPR-friendly; flipping the
@@ -353,13 +417,28 @@ Each key is a bencode byte string (prefixed by its own byte length).
 capped together by one `found_peers` counter, so the total never exceeds
 `numwant`. Clients without BEP 07 ignore the key.
 
+The candidate gate also covers an owner flipping opt-in off while peers
+carrying their IPv6 are still in the swarm: their address stops being
+offered immediately. Combined with D21 this never starves an announcer
+silently: the announcer is either dual-stack (it still receives
+`peers`) or v6-only (it has opted in, so opted-in v6 candidates exist).
+
 **Decision:** also emit `external ip` (BEP 24) with the announcer's own
-address, IPv6 preferred:
+address, IPv6 preferred. **BEP 24 defines the value as packed binary —
+4 bytes for IPv4, 16 bytes for IPv6 — not text** (§11). `ap.addr` is
+already in network order (`s_addr` from `inet_pton`/`getpeername`):
 
 ```cpp
-if (!p->ipv6.empty()) output += bencode_str("external ip") + bencode_str(inet6_text(p->ipv6));
-else                  output += bencode_str("external ip") + bencode_str(inet_text(p->ap));
+// BEP 24: "external ip" is a bencoded string carrying packed bytes.
+if (!p->ipv6.empty()) {
+    output += bencode_str("external ip") + bencode_str(p->ipv6);                          // 16 raw bytes
+} else if (p->has_ipv4) {
+    output += bencode_str("external ip") + bencode_str(std::string(p->ap.addr_port, 4));  // 4 raw bytes
+}
 ```
+
+Thanks to D21 a peer always holds at least one address, so one of the
+two branches always fires.
 
 On master the recorded address already is the public one (XFF replaces
 `remote_addr`, `worker.cpp:373-393`), so a single address is enough. This
@@ -421,6 +500,13 @@ peer with `sockaddr_storage` + `inet_ntop`:
   reject with a clear error: no socket address exists.
 
 The listener always accepts IPv6, independently of `enable_ipv6` (D7).
+
+**Deployment note (Cloudflare).** In production the origin has IPv6 off
+and Cloudflare terminates IPv6, so §4.8 is **not required** for the
+feature to work: the IPv6 client address arrives in a header (§4.1.1).
+The commit is kept for direct connections, explicit binds and unix
+sockets, and is the only piece that could be deferred if scope has to be
+cut (see §10 P2).
 
 ### 4.9 Statistics
 
@@ -538,10 +624,13 @@ is constructed with `has_ipv4 == false`.
 
 - validate both families with `ipv4_is_public` / `ipv6_is_public`; drop
   invalid values individually;
-- if both are empty after validation, return `error("Invalid IP
-  detected")`;
+- validate both families, simulate the `track_ipv6` clearing, and only
+  then check for survivors (D21): if no address survives, return the
+  dedicated D21 opt-in error when the IPv6 family was the only valid
+  public routable address (dropped solely by opt-in), or
+  `error("Invalid IP detected")` otherwise;
 - apply `if (!u->track_ipv6()) ipv6.clear();` to the in-memory peer and
-  to what is recorded;
+  to what is recorded, after that check;
 - `enable_ipv6` gate at the top of `worker::work` (§4.6);
 - add `track_ipv6` to `user` (getter/setter/ctor); select it in
   `load_users`; accept it in the `update_user` action (and default it in
@@ -550,7 +639,8 @@ is constructed with `has_ipv4 == false`.
   `record_snatch` the two addresses; the worker formats each as a
   `X'<hex>'` literal or `''` (`u->is_protected()` → empty) from
   validated bytes only — same injection-safety model as today's
-  `inet_ntoa(...)` expression;
+  `inet_ntoa(...)` expression; the legacy `ip`/`IP` argument receives
+  the IPv4 in dotted form when one exists, `''` otherwise (D22);
 - flush SQL: write `ipv4`, `ipv6`, `port` in the heavy `xbt_files_users`
   insert and add
   `ip=VALUES(ip),ipv4=VALUES(ipv4),ipv6=VALUES(ipv6),port=VALUES(port)`
@@ -565,10 +655,13 @@ is constructed with `has_ipv4 == false`.
 **Test:**
 
 - IPv4-only announce: no regression, `ipv6_peers == 0`, `ipv4` set
-  (binary) and `ipv6` NULL.
+  (binary) and `ipv6` empty (D22).
 - IPv6 announce, `track_ipv6=1`, `enable_ipv6=true`: peer counted,
-  `xbt_files_users.ipv6` set, `ipv4` NULL.
-- same with `track_ipv6=0`: not recorded on IPv6.
+  `xbt_files_users.ipv6` set, `ipv4` empty (D22).
+- same with `track_ipv6=0`: a dual-stack peer is still recorded on
+  IPv4 with the IPv6 dropped; an IPv6-only client gets the dedicated
+  D21 opt-in error, not `Invalid IP detected`.
+- v6-only peer recording: legacy `ip` is `''`, `ipv6` populated (D22).
 - same with `enable_ipv6=false`: clear client error.
 - address change is persisted (`ipv4`/`ipv6`/`port` updated on
   duplicate).
@@ -583,7 +676,7 @@ is constructed with `has_ipv4 == false`.
 
 **What:** generate `peers6` (18 bytes/peer) under the conditions of
 §4.7, sharing the `found_peers`/`numwant` budget with `peers`, and add
-the `external ip` key.
+the `external ip` key (packed binary, D9).
 
 **Test:** qBittorrent or Deluge (BEP 07) over IPv6 sees IPv6 peers and
 downloads from them; rtorrent 0.9.8 (no BEP 07) keeps working; a v6
@@ -760,13 +853,13 @@ Update the schema dump in place:
 ```sql
 -- xbt_files_users (legacy `ip` kept during the staged migration)
 `ip`   varchar(15) NOT NULL DEFAULT '',
-`ipv4` varbinary(4)  DEFAULT NULL,
-`ipv6` varbinary(16) DEFAULT NULL,
+`ipv4` varbinary(4)  NOT NULL DEFAULT '',
+`ipv6` varbinary(16) NOT NULL DEFAULT '',
 `port` int(6) NOT NULL DEFAULT 0,
 -- xbt_snatched (legacy `IP` kept during the staged migration; D20 PK)
 `IP`   varchar(15) NOT NULL,
-`ipv4` varbinary(4)  DEFAULT NULL,
-`ipv6` varbinary(16) DEFAULT NULL,
+`ipv4` varbinary(4)  NOT NULL DEFAULT '',
+`ipv6` varbinary(16) NOT NULL DEFAULT '',
 PRIMARY KEY (`uid`, `fid`),
 -- users_main
 `track_ipv6` tinyint(1) NOT NULL DEFAULT 0,
@@ -789,7 +882,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_files_users'
     AND COLUMN_NAME = 'ipv4');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_files_users ADD COLUMN ipv4 VARBINARY(4) DEFAULT NULL',
+  'ALTER TABLE xbt_files_users ADD COLUMN ipv4 VARBINARY(4) NOT NULL DEFAULT '''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -798,7 +891,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_files_users'
     AND COLUMN_NAME = 'ipv6');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_files_users ADD COLUMN ipv6 VARBINARY(16) DEFAULT NULL',
+  'ALTER TABLE xbt_files_users ADD COLUMN ipv6 VARBINARY(16) NOT NULL DEFAULT '''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -816,7 +909,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'ipv4');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_snatched ADD COLUMN ipv4 VARBINARY(4) DEFAULT NULL',
+  'ALTER TABLE xbt_snatched ADD COLUMN ipv4 VARBINARY(4) NOT NULL DEFAULT '''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -825,7 +918,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'ipv6');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_snatched ADD COLUMN ipv6 VARBINARY(16) DEFAULT NULL',
+  'ALTER TABLE xbt_snatched ADD COLUMN ipv6 VARBINARY(16) NOT NULL DEFAULT '''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -838,11 +931,13 @@ SET @s = IF(@c = 0,
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
--- Backfill the binary IPv4 from the legacy text (stage 1)
+-- Backfill the binary IPv4 from the legacy text (stage 1).
+-- The guard is the initially-empty value (`ipv4 = ''`), not IS NULL —
+-- the columns are NOT NULL DEFAULT '' (D22).
 UPDATE xbt_files_users SET ipv4 = INET6_ATON(ip)
- WHERE ipv4 IS NULL AND ip <> '' AND INET6_ATON(ip) IS NOT NULL;
+ WHERE ipv4 = '' AND ip <> '' AND INET6_ATON(ip) IS NOT NULL;
 UPDATE xbt_snatched SET ipv4 = INET6_ATON(IP)
- WHERE ipv4 IS NULL AND IP <> '' AND INET6_ATON(IP) IS NOT NULL;
+ WHERE ipv4 = '' AND IP <> '' AND INET6_ATON(IP) IS NOT NULL;
 
 -- D20: xbt_snatched becomes unique per (uid, fid).
 -- Guard: once the target PK exists (PRIMARY contains `fid`), skip it all.
@@ -864,11 +959,32 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'snatch_id');
 
--- 2. keep only the newest row per (uid, fid); no ties can survive
-SET @s = IF(@done = 0 AND @c = 1,
-  'DELETE s FROM xbt_snatched s JOIN (SELECT uid, fid, MAX(snatch_id) AS keep FROM xbt_snatched GROUP BY uid, fid) k ON k.uid = s.uid AND k.fid = s.fid AND s.snatch_id < k.keep',
-  'SELECT 1');
-PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+-- 2. keep only the newest row per (uid, fid); no ties can survive.
+--    Batched: multi-table DELETE has no LIMIT, so run it over successive
+--    snatch_id ranges to bound lock wait and undo-log growth (the
+--    transient PK of step 1 makes each range an index range).
+--    The survivor per key is computed ONCE, globally, before the loop:
+--    this is what makes batches independent — a duplicate straddling
+--    two ranges is still removed exactly, with the newest row kept.
+SET @batch = 10000;
+SET @lo    = 0;
+SET @hi    = (SELECT COALESCE(MAX(snatch_id), 0) FROM xbt_snatched);
+CREATE TEMPORARY TABLE xbt_snatched_keep AS
+  SELECT uid, fid, MAX(snatch_id) AS keep FROM xbt_snatched GROUP BY uid, fid;
+batch_loop: REPEAT
+  SET @s = IF(@done = 0 AND @c = 1,
+    'DELETE s FROM xbt_snatched s JOIN xbt_snatched_keep k ON k.uid = s.uid AND k.fid = s.fid AND s.snatch_id BETWEEN @lo AND @lo + @batch AND s.snatch_id < k.keep',
+    'SELECT 1');
+  PREPARE st FROM @s; EXECUTE st;
+  SET @rows = ROW_COUNT();
+  DEALLOCATE PREPARE st;
+  SET @lo = @lo + @batch;
+UNTIL @rows = 0 OR @lo > @hi OR @done = 1 OR @c = 0 END REPEAT batch_loop;
+DROP TEMPORARY TABLE IF EXISTS xbt_snatched_keep;
+-- NOTE: build the survivor table above with no snatch traffic in
+-- flight (see Impact below); otherwise a duplicate written afterwards
+-- would survive the migration. The step-3 PK swap then fails loudly on
+-- any leftover duplicate, which is also the safety net.
 
 -- 3. swap the temporary PK for the real one
 SET @s = IF(@done = 0 AND @c = 1,
@@ -878,10 +994,15 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 ```
 
 Impact: the three `xbt_files_users` `ALTER`s are fast on MySQL 8
-(INPLACE); `xbt_snatched` and `users_main` are instant. The two backfill
-`UPDATE`s touch every row with a legacy `ip` and must be batched on very
-large tables. No downtime required, but a maintenance window is
-preferable.
+(INPLACE); `users_main` is instant. **`xbt_snatched` is not instant:**
+steps 1 and 3 are full table rebuilds (add/swap of the auto-increment
+primary key) and step 2 rewrites whole `snatch_id` batches — on a large
+snatch table this is the heaviest part of the migration. Run it in a
+maintenance window with the tracker's snatch flush paused, so that no
+`(uid, fid)` duplicate lands after step 2a has computed the survivors.
+The two backfill `UPDATE`s touch every row with a legacy `ip` and should
+also be batched on very large tables. No downtime required beyond that,
+but a maintenance window is preferable.
 
 ### 6.3 Migration strategy: staged, like Empornium
 
@@ -920,7 +1041,8 @@ here; the tracker only has to produce the columns below.
 ### 7.1 Tracker-side guarantees (this repository)
 
 - `xbt_files_users.ipv4`/`ipv6` are 4/16 raw bytes, network order; `port`
-  is the announced port; the legacy `ip` is still written in stage 1.
+  is the announced port; the legacy `ip` is still written in stage 1
+  (IPv4 dotted form, `''` for a v6-only peer — D22).
 - `xbt_snatched.ipv4`/`ipv6` likewise; the table is unique per
   `(uid, fid)` (D20), so snatch history returns one row per
   user/torrent.
@@ -966,10 +1088,13 @@ site migration is not blocking `enable_ipv6`. The `user_seedbox` removal
 and the `ips`/CIDR move are a site project that must land before stage 2
 drops `ip`, but not before the flag is enabled.
 
-Prerequisite outside both repositories: the tracker host must have IPv6
-connectivity and, when a proxy sits in front, the proxy must listen on
-IPv6 and forward `X-Forwarded-For` with v6 addresses. Otherwise `peers6`
-is never populated in production, however correct the code is.
+Prerequisite outside both repositories: the announce endpoint must be
+behind Cloudflare on a proxied port, with `CF-Connecting-IP` forwarded to
+the origin, and the tracker's `ignore_xff` must be `false` (§4.1.1). The
+origin itself does **not** need IPv6: Cloudflare terminates IPv6 and
+forwards over IPv4, carrying the client's IPv6 in the header. If the
+tracker were ever exposed on a DNS-only port, IPv6 clients would reach
+the IPv4-only origin directly and fail.
 
 ---
 
@@ -980,7 +1105,10 @@ is never populated in production, however correct the code is.
 - `ipv4_is_public` / `ipv6_is_public` over every range of §4.3, in
   particular `fd00::1` (private), `fc00::1` (private), `fe80::1`,
   `::1`, `2001:db8::1`, `2002::1`, `3ffe::1`, and accepted
-  `2606:4700:4700::1111`, `8.8.8.8`.
+  `2606:4700:4700::1111`, `8.8.8.8`; for IPv4 rejected
+  `203.0.113.50` (documentation), `198.51.100.10` (documentation),
+  `224.0.0.5` (multicast), `240.0.0.1` (reserved), `0.0.0.1`
+  (this-network), and accepted `8.8.8.8`.
 
 ### 8.2 Manual functional tests
 
@@ -990,7 +1118,7 @@ documentation prefix and is rejected by `ipv6_is_public` by design.
 ```bash
 # Test 1: IPv4 must keep working
 curl -4 "http://127.0.0.1:31000/announce?info_hash=%aa%bb%cc%dd&peer_id=-OC0001-123456789012&port=6881&uploaded=0&downloaded=0&left=0&compact=1&event=started" \
-  -H "X-Forwarded-For: 203.0.113.50"        # 203.0.113.0/24 is not in the reject list
+  -H "X-Forwarded-For: 8.8.8.8"             # documentation/reserved IPs are now rejected (§4.3)
 # Expected: success
 
 # Test 2: IPv6 in XFF, enable_ipv6=true
@@ -1034,8 +1162,8 @@ curl -g "http://[::1]:31000/announce?...&compact=1&event=started"
 ### 8.4 IPv4 regression tests
 
 - IPv4-only clients: stats, ratio and connectability identical to before.
-- `stats.ipv6_peers == 0`; DB `ipv4` set (binary), `ipv6` NULL, and the
-  legacy `ip` still written during stage 1.
+- `stats.ipv6_peers == 0`; DB `ipv4` set (binary), `ipv6` empty and the
+  legacy `ip` still written during stage 1 (D22).
 - `ON DUPLICATE` change: a v4 peer changing address now has `ip`,
   `ipv4` and `port` updated; confirm this is acceptable to the site (it
   is the intended `5385c05` behaviour).
@@ -1104,7 +1232,7 @@ must not be split, or the seeders/leechers counts inflate again.
 | D6 | Add `ip=VALUES(ip),ipv4=VALUES(ipv4),ipv6=VALUES(ipv6),port=VALUES(port)` to `ON DUPLICATE KEY UPDATE` | §4.4 |
 | D7 | `enable_ipv6` gates the worker, not the listener | §4.6 |
 | D8 | `ipv6=`/`ipv4=`/`ip=` may fill only the non-connection family | §5 Commit 3 |
-| D9 | Emit BEP 24 `external ip` (announcer's own address, v6 first) | §4.7 |
+| D9 | Emit BEP 24 `external ip` as **packed binary** (4/16 bytes per BEP 24, not text), announcer's address, v6 first | §4.7 |
 | D10 | Migration ships in `gazelle.sql` **and** `migrations/` | §6 |
 | D11 | `ipv4_is_public`/`ipv6_is_public` live in `misc_functions`, portable byte tests, ULA `/7` | §4.3 |
 | D12 | Listener adopts Radiance `7eef3e6`: `listen_host` (`*` / list / `unix:`), one socket per family, `IPV6_V6ONLY=1`, `watcher.fd` | §4.8 |
@@ -1116,10 +1244,22 @@ must not be split, or the seeders/leechers counts inflate again.
 | D18 | N3: implement IPv6 anti-cheat (bans, IP history, dupe IP, IP search) as Luminance | §7.2 |
 | D19 | N4: coordinated tracker + site change, staged | §6.3, §7.3 |
 | D20 | Deduplicate `xbt_snatched`, add `PRIMARY KEY (uid, fid)`, flush via `ON DUPLICATE KEY UPDATE` (aligns with Luminance; destructive, back up first) | §4.4, §6.2, §9.2 |
+| D21 | Validation order: parse → validate → emptiness check (against post-clearing addresses) → opt-in clearing; a v6-only client without `track_ipv6` gets a dedicated opt-in error, never `Invalid IP detected`, never an address-less peer | §4.5, §5 Commit 5 |
+| D22 | Binary columns `NOT NULL DEFAULT ''`, absent = empty string (not NULL, Luminance model); legacy `ip`/`IP` receives the IPv4 dotted form when present, `''` when not | §4.4, §5 Commit 5, §6 |
 
-**No owner decisions remain.** D1–D20 are settled; the N1–N4 site work
-(§7) is a scheduled follow-up in the Gazelle repository, not an open
-question.
+### Pending deployment decisions
+
+Both concern the Cloudflare setup (§4.1.1). The owner decides these
+alone; neither needs staff or forum approval.
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| P1 | Real-client-IP header | add a configurable `real_ip_header` (default `X-Forwarded-For`, production `CF-Connecting-IP`) vs keep the hardcoded XFF | make it configurable and set `CF-Connecting-IP`; XFF's first token is spoofable behind Cloudflare |
+| P2 | Dual-stack listener (Commit 7) | build now vs defer | build now: it is independent of Cloudflare and future-proofs direct IPv6, sockets and explicit binds |
+
+**No other decisions remain open.** D1–D22 are settled, the N1–N4 site
+work (§7) is a scheduled follow-up in the Gazelle repository, and P1/P2
+are the owner's to call.
 
 Known Radiance defects deliberately **not** copied:
 
@@ -1127,6 +1267,8 @@ Known Radiance defects deliberately **not** copied:
 - ULA checked as `fc00::/16`, letting `fd00::/8` through.
 - `s6_addr32`/`s6_addr16` portability.
 - `hex_decode()` applied to announce IPs.
+- IPv4 documentation/reserved/local ranges missing from its public-IP
+  check (we add them in §4.3).
 
 ---
 
@@ -1149,7 +1291,7 @@ Radiance commits worth reading:
 - `edd04bb` "Fix IP range for 169.254.0.0/16 check" — netmask bug
   (§4.3).
 - `23f039c` "Allow to use custom HTTP header name instead of
-  X-Forwarded-For" — `real_ip_header`, out of scope but noted.
+  X-Forwarded-For" — `real_ip_header`, now in scope pending P1 (§4.1.1).
 
 Luminance releases:
 
