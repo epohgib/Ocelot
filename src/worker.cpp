@@ -898,19 +898,43 @@ std::string worker::announce(
         }
     }
 
+    // Compact peer lists: BEP 03 `peers` (6 bytes per peer) and BEP 07
+    // `peers6` (18 bytes per peer). A candidate is offered once: over IPv6 when
+    // the announcer itself is on IPv6 and the candidate's owner has opted in,
+    // otherwise over IPv4 when it has one. Both lists share one numwant budget.
     std::string peers;
+    std::string peers6;
+    const bool announce_v6 = !ipv6.empty();
+    uint32_t found_peers = 0;
     if (numwant > 0) {
         logger->debug(
             "announce: tor={} user={} left={} want={}",
             tor.id, userid, ctx->left, numwant
         );
         peers.reserve(numwant * sizeof(ap.addr_port));
+        peers6.reserve(numwant * 18);
+
+        // Offers a candidate's endpoint, returning false when it has none.
+        auto append_peer = [&](const peer &candidate) -> bool {
+            if (announce_v6 && !candidate.ipv6_port.empty() && candidate.user->track_ipv6()) {
+                peers6.append(candidate.ipv6_port);
+                return true;
+            }
+            if (candidate.has_ipv4) {
+                peers.append(candidate.ap.addr_port, sizeof(ap.addr_port));
+                return true;
+            }
+            return false;
+        };
+
         if (ctx->left > 0) {
             // first show  seeders to a leecher
             if (tor.seeders.size() <= numwant) {
                 // send all of them
-                numwant -= tor.seeders.size();
                 for (const auto &it : tor.seeders) {
+                    if (found_peers >= numwant) {
+                        break;
+                    }
                     auto user = it.second.user;
                     logger->debug(
                         "announce: tor={} user={} direct seeder={}",
@@ -919,17 +943,17 @@ std::string worker::announce(
                     if (
                         !user->is_deleted()
                         && !user->is_protected()
-                        && it.second.has_ipv4
                         && user->get_id() != userid
+                        && append_peer(it.second)
                     ) {
-                        peers.append(it.second.ap.addr_port, sizeof(ap.addr_port));
+                        found_peers++;
                     }
                 }
             } else {
                 // round-robin selection of least recently offered seeders
                 auto it = tor.seeders.upper_bound(tor.last_selected_seeder);
                 auto start = it;
-                while (numwant > 0) {
+                while (found_peers < numwant) {
                     if (it == tor.seeders.end()) {
                         it = tor.seeders.begin();
                     }
@@ -940,12 +964,11 @@ std::string worker::announce(
                     if (
                         !it->second.user->is_deleted()
                         && !it->second.user->is_protected()
-                        && it->second.has_ipv4
                         && it->second.user->get_id() != userid
+                        && append_peer(it->second)
                     ) {
-                        peers.append(it->second.ap.addr_port, sizeof(ap.addr_port));
                         tor.last_selected_seeder = it->first;
-                        --numwant;
+                        found_peers++;
                     }
                     if (++it == start) {
                         break; // wrapped around: no more seeders available
@@ -955,9 +978,9 @@ std::string worker::announce(
         }
         // whether client is leecher or seeder,
         // add leechers until we have a full complement of peers
-        if (numwant > 0 && !tor.leechers.empty()) {
+        if (found_peers < numwant && !tor.leechers.empty()) {
             peer_list::const_iterator it = tor.leechers.begin();
-            while (numwant > 0 && it != tor.leechers.end()) {
+            while (found_peers < numwant && it != tor.leechers.end()) {
                 logger->debug(
                     "announce: tor={} user={} leecher={}",
                     tor.id, userid, it->second.user->get_id()
@@ -966,11 +989,10 @@ std::string worker::announce(
                 if (
                     !it->second.user->is_deleted()
                     && it->second.user->can_leech()
-                    && it->second.has_ipv4
                     && it->second.user->get_id() != userid
+                    && append_peer(it->second)
                 ) {
-                    peers.append(it->second.ap.addr_port, sizeof(ap.addr_port));
-                    --numwant;
+                    found_peers++;
                 }
                 ++it;
             }
@@ -1027,22 +1049,44 @@ std::string worker::announce(
         return error("Access denied, leeching forbidden", client_opts);
     }
 
+    // Bencode dictionaries must have their keys sorted: complete, downloaded,
+    // external ip, incomplete, interval, min interval, peers, peers6.
     std::string output;
     output.reserve(350);
     fmt::format_to(std::back_inserter(output),
         "d8:completei{}"
         "e10:downloadedi{}"
-        "e10:incompletei{}"
+        "e",
+        tor.seeders.size(),
+        tor.completed
+    );
+
+    // BEP 24 `external ip`: the announcer's own address, IPv6 preferred, as
+    // packed binary (16 raw bytes for IPv6, 4 for IPv4).
+    if (!ipv6.empty()) {
+        fmt::format_to(std::back_inserter(output), "11:external ip{}:{}", ipv6.length(), ipv6);
+    } else if (has_ipv4) {
+        std::string v4(reinterpret_cast<const char *>(&ap.addr), sizeof(ap.addr));
+        fmt::format_to(std::back_inserter(output), "11:external ip{}:{}", v4.length(), v4);
+    }
+
+    fmt::format_to(std::back_inserter(output),
+        "10:incompletei{}"
         "e8:intervali{}"
         "e12:min intervali{}"
-        "e5:peers{}:{}e",
-        tor.seeders.size(),
-        tor.completed,
+        "e5:peers{}:{}",
         tor.leechers.size(),
         announce_interval + jitter(randgen),
         announce_interval,
         peers.length(), peers
     );
+
+    // BEP 07 `peers6`, included only for an announcer tracked over IPv6.
+    if (announce_v6 && !peers6.empty()) {
+        fmt::format_to(std::back_inserter(output), "6:peers6{}:{}", peers6.length(), peers6);
+    }
+    output += 'e';
+
     logger->debug("announce: tor={} user={} peer({}) response({})", tor.id, userid, bintohex(peers), output);
 
     /* gzip compression actually makes announce returns larger from our
