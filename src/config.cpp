@@ -65,6 +65,7 @@ void config::init() {
     add("keepalive_timeout", 0u);
     add("daemonize", false);
     add("ignore_xff", false);
+    add("real_ip_header", "X-Forwarded-For");
 
     // Tracker requests
     add("enable_ipv6", false);

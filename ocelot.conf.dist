@@ -14,6 +14,11 @@ connection_timeout  = 10
 keepalive_timeout   = 0
 daemonize           = false
 ignore_xff          = false
+# Header carrying the real client IP when behind a proxy. Behind Cloudflare
+# set this to CF-Connecting-IP: Cloudflare appends the connecting IP to a
+# client-supplied X-Forwarded-For, so its first token is spoofable.
+# An empty value disables reading the header entirely.
+real_ip_header      = X-Forwarded-For
 
 # Accept announces from IPv6 peers (BEP 07). Disabled by default; only
 # users with track_ipv6 enabled on the site are recorded over IPv6

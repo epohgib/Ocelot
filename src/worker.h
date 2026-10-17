@@ -65,6 +65,7 @@ class worker {
     uint32_t numwant_limit;
     bool keepalive_enabled;
     bool enable_ipv6;
+    std::string real_ip_header;
     std::string site_password;
     std::string report_password;
 

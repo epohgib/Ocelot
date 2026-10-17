@@ -6,6 +6,7 @@
 #include <netdb.h>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <limits>
@@ -63,6 +64,8 @@ void worker::load_config(config * conf) {
     enable_ipv6         = conf->get_bool("enable_ipv6");
     site_password       = conf->get_str("site_password");
     report_password     = conf->get_str("report_password");
+    real_ip_header      = conf->get_str("real_ip_header");
+    std::transform(real_ip_header.begin(), real_ip_header.end(), real_ip_header.begin(), ::tolower);
     jitter              = std::uniform_int_distribution<int>(0, conf->get_uint("announce_jitter"));
 }
 
@@ -380,12 +383,12 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
     }
 
     // Client address this announce is attributed to: the socket address by
-    // default, or the X-Forwarded-For header when we are behind a forward
+    // default, or the configured real-IP header when we are behind a forward
     // proxy and configured to trust it.
     client_addr_t client_addr = remote_addr;
 
-    if (!conf->get_bool("ignore_xff")) {
-        auto it = headers.find("x-forwarded-for");
+    if (!conf->get_bool("ignore_xff") && !real_ip_header.empty()) {
+        auto it = headers.find(real_ip_header);
         if (it != headers.end()) {
             std::string ip = it->second;
             size_t comma_pos = ip.find(',');
@@ -403,7 +406,7 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
                 // Keep the raw value out of the response, but log it so the
                 // offending proxy/header can still be diagnosed. Fall back to
                 // the socket address rather than failing the announce.
-                logger->warn("unparseable X-Forwarded-For: {}", ip);
+                logger->warn("unparseable {} header: {}", real_ip_header, ip);
             } else {
                 if (res->ai_family == AF_INET) {
                     client_addr = {ip, AF_INET};
