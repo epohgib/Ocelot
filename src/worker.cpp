@@ -1034,9 +1034,16 @@ std::string worker::announce(
     // Correct the stats for the old user if the peer's user link has changed (really?)
     if (p->user != u) {
         // How often does this happen?
+        char v4_text[INET_ADDRSTRLEN] = {0};
+        if (has_ipv4) {
+            in_addr v4 = {};
+            v4.s_addr = ap.addr;
+            inet_ntop(AF_INET, &v4, v4_text, sizeof(v4_text));
+        }
         logger->error(
-            "peer user changed from {} to {} via {}:{}",
-            p->user->get_id(), u->get_id(), ap.addr, ap.port
+            "peer user changed from {} to {} via {} port {}",
+            p->user->get_id(), u->get_id(),
+            has_ipv4 ? v4_text : "(no IPv4)", ntohs(ap.port)
         );
         p->user = u;
     }
