@@ -1,3 +1,22 @@
+-- 3.2.1 (unreleased)
+BUGFIXES
+* stats.ipv4_peers and stats.ipv6_peers no longer drift when a peer entry is
+  removed by remove_seeder() or drops with a torrent list reload.
+* A re-snatch now updates the legacy IP column together with tstamp and the
+  binary address columns.
+* Announces with an unparseable real_ip_header value are rejected instead of
+  being silently attributed to the proxy address, whose endpoint would
+  otherwise be handed to the swarm.
+* The unix listener no longer blindly unlinks its socket path (a live server
+  on the same path aborts startup), leaves no dead socket file behind on
+  failure or shutdown, and binds 0660 instead of world-writable.
+* Revoking users_main.track_ipv6 immediately clears the user's stored IPv6
+  endpoints; they used to linger until the peer's next announce.
+* The peer-user-changed log line formats the address and port instead of
+  printing a raw uint32 and a network-order port.
+* ocelot.conf.dist warns that enable_ipv6=false makes IPv6 listen_host entries
+  pointless.
+
 -- 3.2.0 (unreleased)
 FEATURES
 * IPv6 tracking: announces over IPv6 are accepted, validated and recorded; one peer holds both families, so a dual-stack client stays a single peer.
