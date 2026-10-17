@@ -409,6 +409,53 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
         }
     }
 
+    // BEP 03/07: the client may advertise its address of the other family with
+    // ipv6= / ipv4= / ip=. Such a parameter may only fill the family the
+    // connection did not come from: the observed address stays authoritative
+    // for its own family, so a spoofed parameter can never overwrite it.
+    for (const char *param_name : {"ipv6", "ipv4", "ip"}) {
+        auto param = params.find(param_name);
+        if (param == params.end()) {
+            continue;
+        }
+        const std::string &ip = param->second;
+
+        struct addrinfo hint = {};
+        struct addrinfo *res = nullptr;
+        hint.ai_family = AF_UNSPEC;
+        hint.ai_flags = AI_NUMERICHOST;
+        if (getaddrinfo(ip.c_str(), nullptr, &hint, &res) != 0) {
+            logger->debug("unparseable {} announce parameter: {}", param_name, ip);
+            continue;
+        }
+        uint16_t family = res->ai_family;
+        freeaddrinfo(res);
+
+        if (family == client_addr.family) {
+            continue;
+        }
+
+        bool is_public = false;
+        if (family == AF_INET) {
+            in_addr v4 = {};
+            inet_pton(AF_INET, ip.c_str(), &v4);
+            is_public = ipv4_is_public(v4);
+        } else if (family == AF_INET6) {
+            in6_addr v6 = {};
+            inet_pton(AF_INET6, ip.c_str(), &v6);
+            is_public = ipv6_is_public(v6);
+        }
+        if (!is_public) {
+            logger->debug("dropping non-public {} announce parameter: {}", param_name, ip);
+            continue;
+        }
+
+        client_addr.alt_ip = ip;
+        client_addr.alt_family = family;
+        logger->debug("accepted {} announce parameter: {}", param_name, ip);
+        break;
+    }
+
     // Trust the port given by the client.
     // If it is incorrect, they will not be connectable. Too bad for them.
     uint16_t remote_port;

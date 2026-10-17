@@ -31,11 +31,15 @@ typedef struct {
 } announce_context;
 
 // Address an announce is attributed to: the socket address, or the
-// X-Forwarded-For header when we trust it. `family` is one of AF_INET,
-// AF_INET6, AF_UNIX.
+// X-Forwarded-For header when we trust it. `alt_ip`/`alt_family` carry the
+// address of the other family when the client advertises one via
+// ipv6= / ipv4= / ip= (empty string / AF_UNSPEC when absent). `family` is one
+// of AF_INET, AF_INET6, AF_UNIX.
 struct client_addr_t {
     std::string ip;
     uint16_t family;
+    std::string alt_ip;
+    uint16_t alt_family;
 };
 
 class worker {
