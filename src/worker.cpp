@@ -27,6 +27,35 @@
 
 std::mutex worker::client_len_mutex;
 
+namespace {
+
+// Family of a bare numeric address: AF_INET, AF_INET6 or AF_UNSPEC. The fast
+// path is inet_pton; getaddrinfo(AI_NUMERICHOST) is the fallback for the
+// forms inet_pton rejects (octal/hexadecimal IPv4, scoped IPv6). Never
+// resolves names.
+uint16_t numeric_ip_family(const std::string &ip) {
+    in_addr v4;
+    if (inet_pton(AF_INET, ip.c_str(), &v4) == 1) {
+        return AF_INET;
+    }
+    in6_addr v6;
+    if (inet_pton(AF_INET6, ip.c_str(), &v6) == 1) {
+        return AF_INET6;
+    }
+    struct addrinfo hint = {};
+    struct addrinfo *res = nullptr;
+    hint.ai_family = AF_UNSPEC;
+    hint.ai_flags = AI_NUMERICHOST;
+    if (getaddrinfo(ip.c_str(), nullptr, &hint, &res) != 0) {
+        return AF_UNSPEC;
+    }
+    uint16_t family = res->ai_family;
+    freeaddrinfo(res);
+    return family;
+}
+
+}  // namespace
+
 const uint64_t xxh_seed = []() {
     std::random_device rd;
     return rd();
@@ -396,37 +425,33 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
                 ip.resize(comma_pos); // truncate before first comma
             }
 
-            // AI_NUMERICHOST parses both families, never resolves names, and
-            // rejects anything that is not a bare numeric address.
-            struct addrinfo hint = {};
-            struct addrinfo *res = nullptr;
-            hint.ai_family = AF_UNSPEC;
-            hint.ai_flags = AI_NUMERICHOST;
-            if (getaddrinfo(ip.c_str(), nullptr, &hint, &res) != 0) {
+            uint16_t family = numeric_ip_family(ip);
+            if (family == AF_UNSPEC) {
                 // Keep the raw value out of the response, but log it so the
-                // offending proxy/header can still be diagnosed. Fall back to
-                // the socket address rather than failing the announce.
-                logger->warn("unparseable {} header: {}", real_ip_header, ip);
-            } else {
-                if (res->ai_family == AF_INET) {
-                    client_addr = {ip, AF_INET};
-                } else if (res->ai_family == AF_INET6) {
-                    if (!enable_ipv6) {
-                        stats.client_error++;
-                        return error("IPv6 tracking is disabled", client_opts);
-                    }
-                    client_addr = {ip, AF_INET6};
+                // offending proxy/header can still be diagnosed. Falling back
+                // to the socket address would attribute the announce to the
+                // proxy and offer its endpoint to the swarm, so fail instead.
+                logger->error("unparseable {} header: {}", real_ip_header, ip);
+                stats.client_error++;
+                return error("Tracker could not parse your " + real_ip_header + " address", client_opts);
+            }
+            if (family == AF_INET6) {
+                if (!enable_ipv6) {
+                    stats.client_error++;
+                    return error("IPv6 tracking is disabled", client_opts);
                 }
-                freeaddrinfo(res);
+                client_addr = {ip, AF_INET6};
+            } else {
+                client_addr = {ip, AF_INET};
             }
         }
     }
 
     // A unix socket has no address of its own: the announce must carry one in
-    // X-Forwarded-For (trusted above) or nothing can be tracked.
+    // the trusted real-IP header (see above) or nothing can be tracked.
     if (client_addr.family == AF_UNIX) {
         stats.client_error++;
-        return error("No client address: a Unix socket connection requires the X-Forwarded-For header", client_opts);
+        return error("No client address: a Unix socket connection requires the " + real_ip_header + " header", client_opts);
     }
 
     // BEP 03/07: the client may advertise its address of the other family with
@@ -439,17 +464,11 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
             continue;
         }
         const std::string &ip = param->second;
-
-        struct addrinfo hint = {};
-        struct addrinfo *res = nullptr;
-        hint.ai_family = AF_UNSPEC;
-        hint.ai_flags = AI_NUMERICHOST;
-        if (getaddrinfo(ip.c_str(), nullptr, &hint, &res) != 0) {
+        uint16_t family = numeric_ip_family(ip);
+        if (family == AF_UNSPEC) {
             logger->debug("unparseable {} announce parameter: {}", param_name, ip);
             continue;
         }
-        uint16_t family = res->ai_family;
-        freeaddrinfo(res);
 
         if (family == client_addr.family) {
             continue;
