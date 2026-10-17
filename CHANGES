@@ -1,3 +1,22 @@
+-- 3.2.0 (unreleased)
+FEATURES
+* IPv6 tracking: announces over IPv6 are accepted, validated and recorded; one peer holds both families, so a dual-stack client stays a single peer.
+* Compact responses carry the BEP 07 peers6 list next to peers, and the BEP 24 external ip key as packed binary (16 bytes IPv6, 4 bytes IPv4).
+* Dual-stack listener: listen_host accepts '*' (all interfaces, both families), a space-separated address list (e.g. "0.0.0.0 ::") or unix:/path/to.sock.
+* Global opt-in enable_ipv6 (default false) and per-user opt-in users_main.track_ipv6 (default 0).
+* Binary addresses in xbt_files_users/xbt_snatched (ipv4/ipv6, plus port for peers); the legacy textual columns are kept and still written.
+* Configurable real_ip_header (default X-Forwarded-For) selects the header carrying the real client IP.
+* stats endpoints report ipv4 peers and ipv6 peers.
+BREAKING
+* Announce addresses are now validated: private, loopback, link-local, multicast, reserved and documentation ranges are rejected for both families. A tracker that only ever sees private addresses (no proxy, LAN clients) will reject those announces.
+* xbt_snatched gains PRIMARY KEY (uid, fid) and its duplicate rows are removed, keeping the newest insertion per pair. Back up the table before migrating.
+BUGFIXES
+* reap_peers() counted every scanned peer in stats.leechers/seeders, including the ones it had just reaped; the counters are now recomputed from the surviving swarms.
+* xbt_snatched no longer accumulates a row per re-snatch, and a peer changing address updates ip/ipv4/ipv6/port on duplicate.
+NOTE
+* Stage 1 of a staged migration: the legacy textual ip/IP columns are kept and still written, so the site keeps working; dropping them is a later change.
+* IPv6 is only tracked after an explicit opt-in, for existing and new users alike.
+
 -- 3.1.0 (2026-04-13)
 FEATURES
 * Ocelot now uses remote address of listen socket or X-Forwarded-For header as IP source.

@@ -1,7 +1,9 @@
 # Ocelot
 
 Ocelot is a BitTorrent tracker written in C++ for the [Gazelle](http://github.com/OPSnet/Gazelle) project.
-It supports requests over TCP and can only track IPv4 peers.
+It supports requests over TCP and tracks IPv4 and IPv6 peers (BEP 07). IPv6 is
+opt-in: enable it globally with `enable_ipv6` and per user with
+`users_main.track_ipv6`.
 
 ## Ocelot Compile-time Dependencies
 
@@ -79,6 +81,12 @@ docker run -v $(pwd)/ocelot.conf:/srv/ocelot.conf ocelot
 By default, ocelot will trust X-Forwarded-For headers as the source for client
 IP addresses. If ocelot is running behind a proxy, this is the desired behavior.
 (And if it is not, how are you performing SSL termination?)
+
+The header that is trusted is configurable with `real_ip_header`. Behind
+Cloudflare it must be set to `CF-Connecting-IP`: Cloudflare appends the
+connecting address to a client-supplied X-Forwarded-For, so its first token is
+under the client's control. Only the first token of the configured header is
+used.
 
 If, for whatever reason, ocelot is not behind a proxy, this would allow an
 attacker to insert a bogus X-Forwarded-For header and set the IP address to a

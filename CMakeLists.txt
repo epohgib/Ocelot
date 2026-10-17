@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.12)
 project(ocelot
-    VERSION 3.0.0
+    VERSION 3.2.0
 )
 
 # Make a subdirectory, and run cmake there (mkdir build; cd build; cmake ..)
