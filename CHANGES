@@ -16,6 +16,8 @@ BUGFIXES
 NOTE
 * Stage 1 of a staged migration: the legacy textual ip/IP columns are kept and still written, so the site keeps working; dropping them is a later change.
 * IPv6 is only tracked after an explicit opt-in, for existing and new users alike.
+* Deliberate differences from Empornium/Radiance: the observed connection/header address is authoritative for its own family, so ipv6=/ipv4=/ip= can only fill the other family (Radiance lets them override both); an unparseable real_ip_header value is a hard error instead of a silent fallback to the socket address; the rejected range sets are a strict superset of Radiance's and fix its fc00::/7 gap (fd00::/8 unique-local passes there), at the cost of also rejecting 0.0.0.0/8, documentation, multicast and 240.0.0.0/4.
+* Known limitation, shared with Radiance: peers are keyed by (peer id, user), so a client announcing over both families without the ipv6=/ipv4= parameters overwrites its stored address set on each announce; only clients that advertise the other family keep both endpoints.
 
 -- 3.1.0 (2026-04-13)
 FEATURES

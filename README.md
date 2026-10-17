@@ -5,6 +5,29 @@ It supports requests over TCP and tracks IPv4 and IPv6 peers (BEP 07). IPv6 is
 opt-in: enable it globally with `enable_ipv6` and per user with
 `users_main.track_ipv6`.
 
+### IPv6 tracking model
+
+The address observed on the connection (or in the trusted real-IP header) is
+authoritative for its own family: an announce coming over IPv4 is always
+tracked on that IPv4 address, and likewise for IPv6. The client may advertise
+its other family with the `ipv6=` / `ipv4=` / `ip=` announce parameters, which
+are accepted only when they are globally routable addresses and only when they
+fill the family the connection did not come from. Both families are then
+offered from a single peer: `peers6` (BEP 07) to IPv6 announcers, `peers`
+(BEP 03) to everyone. Private, loopback, link-local, multicast, reserved and
+documentation ranges are rejected for both families.
+
+Known limitation, shared with Radiance: peers are keyed by (peer id, user), so
+a client that announces over both families *without* those parameters
+overwrites its stored address set on each announce. Clients that advertise the
+other family keep both endpoints; most current clients do.
+
+These choices differ deliberately from
+[Empornium/Radiance](https://github.com/Empornium/Radiance): there the
+parameters can override the observed family, an unparseable real-IP header
+falls back silently to the socket address, and the rejected range set is
+narrower (it misses fd00::/8 and accepts multicast/broadcast).
+
 ## Ocelot Compile-time Dependencies
 
 * [CMake](https://cmake.org/) (3.12+ required)
