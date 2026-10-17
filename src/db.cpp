@@ -495,7 +495,8 @@ void mysql::flush_snatches() {
     snatch_queue.push(
         fmt::format(
             "INSERT INTO xbt_snatched(uid,fid,tstamp,IP,ipv4,ipv6)VALUES{}"
-            "ON DUPLICATE KEY UPDATE tstamp=VALUES(tstamp),ipv4=VALUES(ipv4),ipv6=VALUES(ipv6)",
+            "ON DUPLICATE KEY UPDATE tstamp=VALUES(tstamp),IP=VALUES(IP),"
+            "ipv4=VALUES(ipv4),ipv6=VALUES(ipv6)",
             snatch_buffer
         )
     );
