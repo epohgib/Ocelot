@@ -1499,6 +1499,13 @@ peer* worker::insert_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer
 }
 
 void worker::remove_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it) {
+    // Keep the family counters in sync with the removed peer entry.
+    if (peer_it->second.has_ipv4) {
+        stats.ipv4_peers--;
+    }
+    if (!peer_it->second.ipv6.empty()) {
+        stats.ipv6_peers--;
+    }
     tor.seeders.erase(peer_it);
     stats.seeders--;
     u->decr_seeding();

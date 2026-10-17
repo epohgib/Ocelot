@@ -153,9 +153,21 @@ void mysql::load_torrents(torrent_list &torrents) {
                 stats.seeders -= tor.seeders.size();
                 for (auto &p : tor.leechers) {
                     p.second.user->decr_leeching();
+                    if (p.second.has_ipv4) {
+                        stats.ipv4_peers--;
+                    }
+                    if (!p.second.ipv6.empty()) {
+                        stats.ipv6_peers--;
+                    }
                 }
                 for (auto &p : tor.seeders) {
                     p.second.user->decr_seeding();
+                    if (p.second.has_ipv4) {
+                        stats.ipv4_peers--;
+                    }
+                    if (!p.second.ipv6.empty()) {
+                        stats.ipv6_peers--;
+                    }
                 }
                 torrents.erase(it);
             }
