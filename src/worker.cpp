@@ -1382,23 +1382,51 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
             protect_ip = true;
         }
         auto track_ipv6_it = params.find("track_ipv6");
-        std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
-        user_list::iterator i = users_list.find(passkey);
-        if (i == users_list.end()) {
-            logger->warn(
-                "no user with passkey {} found when attempting to change leeching status!",
-                passkey
-            );
-        } else {
-            i->second->set_protected(protect_ip);
-            i->second->set_leechstatus(can_leech);
-            if (track_ipv6_it != params.end()) {
-                i->second->set_track_ipv6(track_ipv6_it->second == "1");
+        user_ptr revoked_user;
+        {
+            std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
+            user_list::iterator i = users_list.find(passkey);
+            if (i == users_list.end()) {
+                logger->warn(
+                    "no user with passkey {} found when attempting to change leeching status!",
+                    passkey
+                );
+            } else {
+                i->second->set_protected(protect_ip);
+                i->second->set_leechstatus(can_leech);
+                if (track_ipv6_it != params.end()) {
+                    bool track = track_ipv6_it->second == "1";
+                    if (i->second->track_ipv6() && !track) {
+                        revoked_user = i->second;
+                    }
+                    i->second->set_track_ipv6(track);
+                }
+                logger->info(
+                    "updated user {} protect({}) leech({}) track_ipv6({})",
+                    passkey, protect_ip, can_leech, i->second->track_ipv6()
+                );
             }
-            logger->info(
-                "updated user {} protect({}) leech({}) track_ipv6({})",
-                passkey, protect_ip, can_leech, i->second->track_ipv6()
-            );
+        }
+        if (revoked_user) {
+            // The opt-out must not leave stored IPv6 endpoints behind:
+            // append_peer() already filters on the live flag, but the stored
+            // endpoint and the family counter would outlive it until the
+            // peer's next announce. update_users is rare, so the full scan is
+            // acceptable.
+            std::lock_guard<std::mutex> tl_lock(db->torrent_list_mutex);
+            for (auto &t : torrents_list) {
+                auto clear_v6 = [&](peer_list &peers) {
+                    for (auto &p : peers) {
+                        if (p.second.user == revoked_user && !p.second.ipv6.empty()) {
+                            stats.ipv6_peers--;
+                            p.second.ipv6.clear();
+                            p.second.ipv6_port.clear();
+                        }
+                    }
+                };
+                clear_v6(t.second.leechers);
+                clear_v6(t.second.seeders);
+            }
         }
     } else if (action == "add_whitelist") {
         std::string peer_id = params["peer_id"];
