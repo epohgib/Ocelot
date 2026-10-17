@@ -30,6 +30,14 @@ typedef struct {
     bool event_stopped;
 } announce_context;
 
+// Address an announce is attributed to: the socket address, or the
+// X-Forwarded-For header when we trust it. `family` is one of AF_INET,
+// AF_INET6, AF_UNIX.
+struct client_addr_t {
+    std::string ip;
+    uint16_t family;
+};
+
 class worker {
   private:
     config * conf;
@@ -74,8 +82,8 @@ class worker {
  public:
     worker(config * conf_obj, torrent_list &torrents, user_list &users, std::vector<std::string> &_whitelist, mysql * db_obj, site_comm * sc);
     void reload_config(config * conf);
-    std::string work(const std::string &input, uint32_t remote_addr, client_opts_t &client_opts);
-    std::string announce(const std::string &peer_id, torrent &tor, user_ptr &u, const announce_context *ctx, uint32_t numwant, const addr_port &ap, const client_opts_t &client_opts);
+    std::string work(const std::string &input, const client_addr_t &remote_addr, client_opts_t &client_opts);
+    std::string announce(const std::string &peer_id, torrent &tor, user_ptr &u, const announce_context *ctx, uint32_t numwant, const client_addr_t &addr, uint16_t remote_port, const client_opts_t &client_opts);
     std::string scrape(const std::list<std::string> &infohashes, params_type &headers, client_opts_t &client_opts);
     std::string update(params_type &params, const client_opts_t &client_opts);
 

@@ -204,8 +204,12 @@ void connection_middleman::handle_read(ev::io &watcher, int events_flags) {
             socklen_t addr_len = sizeof(client_addr);
             getpeername(connect_sock, reinterpret_cast<sockaddr *>(&client_addr), &addr_len);
 
+            char ip[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+            client_addr_t remote_addr = {ip, AF_INET};
+
             //--- CALL WORKER
-            response = work->work(request, client_addr.sin_addr.s_addr, client_opts);
+            response = work->work(request, remote_addr, client_opts);
             request.clear();
         }
 

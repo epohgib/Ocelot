@@ -2,6 +2,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <arpa/inet.h>
+#include <netdb.h>
+
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -87,7 +90,7 @@ bool worker::shutdown() {
     return false;
 }
 
-std::string worker::work(const std::string &input, uint32_t remote_addr, client_opts_t &client_opts) {
+std::string worker::work(const std::string &input, const client_addr_t &remote_addr, client_opts_t &client_opts) {
     unsigned int input_length = input.length();
 
     //---------- Parse request - ugly but fast. Using substr exploded.
@@ -368,8 +371,11 @@ std::string worker::work(const std::string &input, uint32_t remote_addr, client_
         return error("Invalid peer ID ", client_opts);
     }
 
-    // If we are behind a forward proxy, trust the X-Forwarded-For header
-    // and replace the remote address (unless configured not to).
+    // Client address this announce is attributed to: the socket address by
+    // default, or the X-Forwarded-For header when we are behind a forward
+    // proxy and configured to trust it.
+    client_addr_t client_addr = remote_addr;
+
     if (!conf->get_bool("ignore_xff")) {
         auto it = headers.find("x-forwarded-for");
         if (it != headers.end()) {
@@ -378,18 +384,28 @@ std::string worker::work(const std::string &input, uint32_t remote_addr, client_
             if (comma_pos != std::string::npos) {
                 ip.resize(comma_pos); // truncate before first comma
             }
-            struct sockaddr_in sa;
-            if (!inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr))) {
+
+            // AI_NUMERICHOST parses both families, never resolves names, and
+            // rejects anything that is not a bare numeric address.
+            struct addrinfo hint = {};
+            struct addrinfo *res = nullptr;
+            hint.ai_family = AF_UNSPEC;
+            hint.ai_flags = AI_NUMERICHOST;
+            if (getaddrinfo(ip.c_str(), nullptr, &hint, &res) != 0) {
                 // Keep the raw value out of the response, but log it so the
-                // offending proxy/header can still be diagnosed.
-                logger->error("unparseable X-Forwarded-For: {}", ip);
-                return error(
-                    "Tracker could not parse your X-Forwarded-For address "
-                    "(IPv6 is not supported); please connect to the tracker over IPv4.",
-                    client_opts
-                );
-            };
-            remote_addr = sa.sin_addr.s_addr;
+                // offending proxy/header can still be diagnosed. Fall back to
+                // the socket address rather than failing the announce.
+                logger->warn("unparseable X-Forwarded-For: {}", ip);
+            } else {
+                if (res->ai_family == AF_INET) {
+                    client_addr = {ip, AF_INET};
+                } else if (res->ai_family == AF_INET6) {
+                    // Parsed and carried, but nothing consumes IPv6 yet: fall
+                    // back to the socket address.
+                    logger->warn("IPv6 X-Forwarded-For ({}) is not tracked yet, using the socket address", ip);
+                }
+                freeaddrinfo(res);
+            }
         }
     }
 
@@ -407,7 +423,6 @@ std::string worker::work(const std::string &input, uint32_t remote_addr, client_
             return error("client port value out of range", client_opts);
         }
     }
-    addr_port ap = {remote_addr, htons(remote_port)};
 
     // Let's translate the infohash into something nice
     // info_hash is a url encoded (hex) base 20 number
@@ -474,7 +489,7 @@ std::string worker::work(const std::string &input, uint32_t remote_addr, client_
     }
     wl_lock.unlock();
 
-    return announce(peer_id, tor->second, u, &ctx, numwant, ap, client_opts);
+    return announce(peer_id, tor->second, u, &ctx, numwant, client_addr, remote_port, client_opts);
 }
 
 std::string worker::announce(
@@ -483,7 +498,8 @@ std::string worker::announce(
     user_ptr &u,
     const announce_context *ctx,
     uint32_t numwant,
-    const addr_port &ap,
+    const client_addr_t &addr,
+    uint16_t remote_port,
     const client_opts_t &client_opts
 ) {
     std::chrono::steady_clock::time_point announce_begin = std::chrono::steady_clock::now();
@@ -497,6 +513,16 @@ std::string worker::announce(
     userid_t userid = u->get_id();
 
     logger->debug("announce: tor={} user={} up={} down={} left={} corrupt={}", tor.id, userid, ctx->uploaded, ctx->downloaded, ctx->left, ctx->corrupt);
+
+    // Peer endpoint: the address the announce is attributed to, paired with
+    // the client-announced port. Only IPv4 is consumable here for now.
+    addr_port ap = {};
+    if (addr.family == AF_INET) {
+        in_addr v4 = {};
+        inet_pton(AF_INET, addr.ip.c_str(), &v4);
+        ap.addr = v4.s_addr;
+        ap.port = htons(remote_port);
+    }
 
     xxh::hash_state_t<64> state(xxh_seed);
     state.update(peer_id);
