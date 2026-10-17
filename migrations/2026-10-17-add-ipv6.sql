@@ -1,5 +1,20 @@
 -- Idempotent IPv6 migration (adds binary columns, keeps legacy text)
 
+-- PRE-FLIGHT counts (informational, not gates): read these three numbers
+-- before proceeding. No abort — an anomalous row must not stop an
+-- otherwise correct migration, and duplicates are expected. Cost is one
+-- scan per count, acceptable once, in the maintenance window.
+-- 1) textual addresses the backfill does not copy (a short IPv6 literal
+--    or an unparseable value): they stay without a binary address until
+--    the tracker re-announces them.
+SELECT count(*) AS skipped_files_users FROM xbt_files_users
+ WHERE ip <> '' AND (INET6_ATON(ip) IS NULL OR LENGTH(INET6_ATON(ip)) <> 4);
+SELECT count(*) AS skipped_snatched FROM xbt_snatched
+ WHERE IP <> '' AND (INET6_ATON(IP) IS NULL OR LENGTH(INET6_ATON(IP)) <> 4);
+-- 2) duplicate (uid, fid) rows that D20 deletes: the one irreversible
+--    step of this migration (see the plan's Impact note; back up first).
+SELECT count(*) - count(DISTINCT uid, fid) AS duplicates_to_delete FROM xbt_snatched;
+
 -- xbt_files_users.ipv4
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_files_users'
@@ -56,11 +71,14 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- Backfill the binary IPv4 from the legacy text (stage 1).
 -- The guard is the initially-empty value (`ipv4 = ''`), not IS NULL —
--- the columns are NOT NULL DEFAULT '' (D22).
+-- the columns are NOT NULL DEFAULT '' (D22). Only a 4 byte address
+-- belongs in a varbinary(4): the text column can hold a short IPv6
+-- literal, and INET6_ATON() of one is 16 bytes, so an IS NOT NULL guard
+-- would abort the migration (ERROR 1406) on the assignment.
 UPDATE xbt_files_users SET ipv4 = INET6_ATON(ip)
- WHERE ipv4 = '' AND ip <> '' AND INET6_ATON(ip) IS NOT NULL;
+ WHERE ipv4 = '' AND ip <> '' AND LENGTH(INET6_ATON(ip)) = 4;
 UPDATE xbt_snatched SET ipv4 = INET6_ATON(IP)
- WHERE ipv4 = '' AND IP <> '' AND INET6_ATON(IP) IS NOT NULL;
+ WHERE ipv4 = '' AND IP <> '' AND LENGTH(INET6_ATON(IP)) = 4;
 
 -- D20: xbt_snatched becomes unique per (uid, fid).
 -- Guard: once the target PK exists (PRIMARY contains `fid`), skip it all.

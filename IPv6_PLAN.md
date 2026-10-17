@@ -877,12 +877,27 @@ Adjust the date to the actual merge date. Idempotent: MySQL 8 has no
 ```sql
 -- Idempotent IPv6 migration (adds binary columns, keeps legacy text)
 
+-- PRE-FLIGHT counts (informational, not gates): read these three numbers
+-- before proceeding. No abort — an anomalous row must not stop an
+-- otherwise correct migration, and duplicates are expected. Cost is one
+-- scan per count, acceptable once, in the maintenance window.
+-- 1) textual addresses the backfill does not copy (a short IPv6 literal
+--    or an unparseable value): they stay without a binary address until
+--    the tracker re-announces them.
+SELECT count(*) AS skipped_files_users FROM xbt_files_users
+ WHERE ip <> '' AND (INET6_ATON(ip) IS NULL OR LENGTH(INET6_ATON(ip)) <> 4);
+SELECT count(*) AS skipped_snatched FROM xbt_snatched
+ WHERE IP <> '' AND (INET6_ATON(IP) IS NULL OR LENGTH(INET6_ATON(IP)) <> 4);
+-- 2) duplicate (uid, fid) rows that D20 deletes: the one irreversible
+--    step of this migration (see the Impact note below; back up first).
+SELECT count(*) - count(DISTINCT uid, fid) AS duplicates_to_delete FROM xbt_snatched;
+
 -- xbt_files_users.ipv4
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_files_users'
     AND COLUMN_NAME = 'ipv4');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_files_users ADD COLUMN ipv4 VARBINARY(4) NOT NULL DEFAULT '''',
+  'ALTER TABLE xbt_files_users ADD COLUMN ipv4 VARBINARY(4) NOT NULL DEFAULT ''''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -891,7 +906,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_files_users'
     AND COLUMN_NAME = 'ipv6');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_files_users ADD COLUMN ipv6 VARBINARY(16) NOT NULL DEFAULT '''',
+  'ALTER TABLE xbt_files_users ADD COLUMN ipv6 VARBINARY(16) NOT NULL DEFAULT ''''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -909,7 +924,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'ipv4');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_snatched ADD COLUMN ipv4 VARBINARY(4) NOT NULL DEFAULT '''',
+  'ALTER TABLE xbt_snatched ADD COLUMN ipv4 VARBINARY(4) NOT NULL DEFAULT ''''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -918,7 +933,7 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'ipv6');
 SET @s = IF(@c = 0,
-  'ALTER TABLE xbt_snatched ADD COLUMN ipv6 VARBINARY(16) NOT NULL DEFAULT '''',
+  'ALTER TABLE xbt_snatched ADD COLUMN ipv6 VARBINARY(16) NOT NULL DEFAULT ''''',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
@@ -933,11 +948,14 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 
 -- Backfill the binary IPv4 from the legacy text (stage 1).
 -- The guard is the initially-empty value (`ipv4 = ''`), not IS NULL —
--- the columns are NOT NULL DEFAULT '' (D22).
+-- the columns are NOT NULL DEFAULT '' (D22). Only a 4 byte address
+-- belongs in a varbinary(4): the text column can hold a short IPv6
+-- literal, and INET6_ATON() of one is 16 bytes, so an IS NOT NULL guard
+-- would abort the migration (ERROR 1406) on the assignment.
 UPDATE xbt_files_users SET ipv4 = INET6_ATON(ip)
- WHERE ipv4 = '' AND ip <> '' AND INET6_ATON(ip) IS NOT NULL;
+ WHERE ipv4 = '' AND ip <> '' AND LENGTH(INET6_ATON(ip)) = 4;
 UPDATE xbt_snatched SET ipv4 = INET6_ATON(IP)
- WHERE ipv4 = '' AND IP <> '' AND INET6_ATON(IP) IS NOT NULL;
+ WHERE ipv4 = '' AND IP <> '' AND LENGTH(INET6_ATON(IP)) = 4;
 
 -- D20: xbt_snatched becomes unique per (uid, fid).
 -- Guard: once the target PK exists (PRIMARY contains `fid`), skip it all.
@@ -959,27 +977,20 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'snatch_id');
 
--- 2. keep only the newest row per (uid, fid); no ties can survive.
---    Batched: multi-table DELETE has no LIMIT, so run it over successive
---    snatch_id ranges to bound lock wait and undo-log growth (the
---    transient PK of step 1 makes each range an index range).
---    The survivor per key is computed ONCE, globally, before the loop:
---    this is what makes batches independent — a duplicate straddling
---    two ranges is still removed exactly, with the newest row kept.
-SET @batch = 10000;
-SET @lo    = 0;
-SET @hi    = (SELECT COALESCE(MAX(snatch_id), 0) FROM xbt_snatched);
-CREATE TEMPORARY TABLE xbt_snatched_keep AS
-  SELECT uid, fid, MAX(snatch_id) AS keep FROM xbt_snatched GROUP BY uid, fid;
-batch_loop: REPEAT
-  SET @s = IF(@done = 0 AND @c = 1,
-    'DELETE s FROM xbt_snatched s JOIN xbt_snatched_keep k ON k.uid = s.uid AND k.fid = s.fid AND s.snatch_id BETWEEN @lo AND @lo + @batch AND s.snatch_id < k.keep',
-    'SELECT 1');
-  PREPARE st FROM @s; EXECUTE st;
-  SET @rows = ROW_COUNT();
-  DEALLOCATE PREPARE st;
-  SET @lo = @lo + @batch;
-UNTIL @rows = 0 OR @lo > @hi OR @done = 1 OR @c = 0 END REPEAT batch_loop;
+-- 2. keep only the newest row per (uid, fid), so no ties can survive.
+--    Multi-table DELETE has no LIMIT, and a labeled REPEAT loop is only
+--    valid inside a stored program, so this is a single set-based
+--    statement: the survivor per key is computed once and every older
+--    duplicate goes in the same pass. On a very large snatch table this is
+--    the heaviest statement of the migration (see the Impact note below).
+SET @s = IF(@done = 0 AND @c = 1,
+  'CREATE TEMPORARY TABLE xbt_snatched_keep AS SELECT uid, fid, MAX(snatch_id) AS keep FROM xbt_snatched GROUP BY uid, fid',
+  'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
+SET @s = IF(@done = 0 AND @c = 1,
+  'DELETE s FROM xbt_snatched s JOIN xbt_snatched_keep k ON k.uid = s.uid AND k.fid = s.fid WHERE s.snatch_id < k.keep',
+  'SELECT 1');
+PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 DROP TEMPORARY TABLE IF EXISTS xbt_snatched_keep;
 -- NOTE: build the survivor table above with no snatch traffic in
 -- flight (see Impact below); otherwise a duplicate written afterwards
@@ -996,10 +1007,11 @@ PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 Impact: the three `xbt_files_users` `ALTER`s are fast on MySQL 8
 (INPLACE); `users_main` is instant. **`xbt_snatched` is not instant:**
 steps 1 and 3 are full table rebuilds (add/swap of the auto-increment
-primary key) and step 2 rewrites whole `snatch_id` batches — on a large
-snatch table this is the heaviest part of the migration. Run it in a
-maintenance window with the tracker's snatch flush paused, so that no
-`(uid, fid)` duplicate lands after step 2a has computed the survivors.
+primary key) and step 2 scans the whole table to compute the survivors
+and delete the older duplicates — on a large snatch table this is the
+heaviest part of the migration. Run it in a maintenance window with the
+tracker's snatch flush paused, so that no `(uid, fid)` duplicate lands
+after the survivor table has been computed.
 The two backfill `UPDATE`s touch every row with a legacy `ip` and should
 also be batched on very large tables. No downtime required beyond that,
 but a maintenance window is preferable.
