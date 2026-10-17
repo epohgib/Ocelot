@@ -86,3 +86,7 @@ enable_testing()
 add_executable(test_ip tests/test_ip.cpp src/misc_functions.cpp)
 target_include_directories(test_ip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME ip_validation COMMAND test_ip)
+
+add_executable(test_user_update tests/test_user_update.cpp)
+target_include_directories(test_user_update PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_test(NAME user_update COMMAND test_user_update)

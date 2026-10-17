@@ -1373,15 +1373,6 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
         }
     } else if (action == "update_user") {
         std::string passkey = params["passkey"];
-        bool can_leech = true;
-        bool protect_ip = false;
-        if (params["can_leech"] == "0") {
-            can_leech = false;
-        }
-        if (params["visible"] == "0") {
-            protect_ip = true;
-        }
-        auto track_ipv6_it = params.find("track_ipv6");
         user_ptr revoked_user;
         {
             std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
@@ -1392,18 +1383,17 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
                     passkey
                 );
             } else {
-                i->second->set_protected(protect_ip);
-                i->second->set_leechstatus(can_leech);
-                if (track_ipv6_it != params.end()) {
-                    bool track = track_ipv6_it->second == "1";
-                    if (i->second->track_ipv6() && !track) {
-                        revoked_user = i->second;
-                    }
-                    i->second->set_track_ipv6(track);
+                bool was_tracking_ipv6 = i->second->track_ipv6();
+                i->second->apply_update(params);
+                if (was_tracking_ipv6 && !i->second->track_ipv6()) {
+                    revoked_user = i->second;
                 }
                 logger->info(
                     "updated user {} protect({}) leech({}) track_ipv6({})",
-                    passkey, protect_ip, can_leech, i->second->track_ipv6()
+                    passkey,
+                    i->second->is_protected(),
+                    i->second->can_leech(),
+                    i->second->track_ipv6()
                 );
             }
         }
