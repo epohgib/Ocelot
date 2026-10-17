@@ -76,8 +76,8 @@ class worker {
 
     static std::string get_del_reason(int code);
 
-    static peer_list::iterator add_leecher(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key);
-    static peer_list::iterator add_seeder(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key);
+    static peer_list::iterator add_leecher(torrent &tor, user_ptr &u, const addr_port &ap, bool has_ipv4, const std::string &ipv6, const std::string &ipv6_port, const peerkey_t &peer_key);
+    static peer_list::iterator add_seeder(torrent &tor, user_ptr &u, const addr_port &ap, bool has_ipv4, const std::string &ipv6, const std::string &ipv6_port, const peerkey_t &peer_key);
     static peer_list::iterator move_seeder_to_leecher(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key);
     static peer_list::iterator move_leecher_to_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key);
     static peer* insert_seeder(torrent &tor, user_ptr &u, peer_list::iterator &peer_it, const peerkey_t &peer_key);

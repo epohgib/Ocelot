@@ -559,17 +559,44 @@ std::string worker::announce(
     bool peer_changed = false;       // Whether or not the peer is new or has changed since the last announcement
     userid_t userid = u->get_id();
 
-    logger->debug("announce: tor={} user={} up={} down={} left={} corrupt={}", tor.id, userid, ctx->uploaded, ctx->downloaded, ctx->left, ctx->corrupt);
-
-    // Peer endpoint: the address the announce is attributed to, paired with
-    // the client-announced port. Only IPv4 is consumable here for now.
+    // Peer endpoints: the address(es) this announce is attributed to, each
+    // paired with the client-announced port (the same for both families). The
+    // connection address is authoritative for its own family; the alternate
+    // address, when present, fills the other one. At least one is present.
     addr_port ap = {};
+    ap.port = htons(remote_port);
+
+    const std::string *ipv4_str = nullptr;
+    const std::string *ipv6_str = nullptr;
     if (addr.family == AF_INET) {
-        in_addr v4 = {};
-        inet_pton(AF_INET, addr.ip.c_str(), &v4);
-        ap.addr = v4.s_addr;
-        ap.port = htons(remote_port);
+        ipv4_str = &addr.ip;
+    } else if (addr.family == AF_INET6) {
+        ipv6_str = &addr.ip;
     }
+    if (addr.alt_family == AF_INET) {
+        ipv4_str = &addr.alt_ip;
+    } else if (addr.alt_family == AF_INET6) {
+        ipv6_str = &addr.alt_ip;
+    }
+
+    bool has_ipv4 = false;
+    std::string ipv6;       // 16 raw bytes, empty when absent
+    std::string ipv6_port;  // 18 compact bytes, empty when absent
+    if (ipv4_str != nullptr) {
+        in_addr v4 = {};
+        inet_pton(AF_INET, ipv4_str->c_str(), &v4);
+        ap.addr = v4.s_addr;
+        has_ipv4 = true;
+    }
+    if (ipv6_str != nullptr) {
+        in6_addr v6 = {};
+        inet_pton(AF_INET6, ipv6_str->c_str(), &v6);
+        ipv6.assign(reinterpret_cast<const char *>(v6.s6_addr), sizeof(v6.s6_addr));
+        ipv6_port = ipv6;
+        ipv6_port.append(reinterpret_cast<const char *>(&ap.port), sizeof(ap.port));
+    }
+
+    logger->debug("announce: tor={} user={} up={} down={} left={} corrupt={} ipv4={} ipv6={}", tor.id, userid, ctx->uploaded, ctx->downloaded, ctx->left, ctx->corrupt, has_ipv4, !ipv6.empty());
 
     xxh::hash_state_t<64> state(xxh_seed);
     state.update(peer_id);
@@ -597,7 +624,7 @@ std::string worker::announce(
                 peer_it = worker::move_seeder_to_leecher(tor, u, peer_it, peer_key);
                 peer_changed = true;
             } else {
-                peer_it = worker::add_leecher(tor, u, ap, peer_key);
+                peer_it = worker::add_leecher(tor, u, ap, has_ipv4, ipv6, ipv6_port, peer_key);
                 inserted = true;
             }
         }
@@ -606,7 +633,7 @@ std::string worker::announce(
         if (peer_it == tor.leechers.end()) {
             peer_it = tor.seeders.find(peer_key);
             if (peer_it == tor.seeders.end()) {
-                peer_it = worker::add_seeder(tor, u, ap, peer_key);
+                peer_it = worker::add_seeder(tor, u, ap, has_ipv4, ipv6, ipv6_port, peer_key);
                 inserted = true;
             } else {
                 // Already a seeder, not a real completion
@@ -627,7 +654,7 @@ std::string worker::announce(
         if (peer_it == tor.seeders.end()) {
             peer_it = tor.leechers.find(peer_key);
             if (peer_it == tor.leechers.end()) {
-                peer_it = worker::add_seeder(tor, u, ap, peer_key);
+                peer_it = worker::add_seeder(tor, u, ap, has_ipv4, ipv6, ipv6_port, peer_key);
                 inserted = true;
             } else {
                 peer_it = worker::move_leecher_to_seeder(tor, u, peer_it, peer_key);
@@ -714,9 +741,17 @@ std::string worker::announce(
     }
     p->left = ctx->left;
 
-    // Update the remote address if their ISP reassigned a new address in the interval
-    if (memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0) {
+    // Update the addresses if they changed since the last announce. The IPv6
+    // endpoint is compared whole (address plus port), mirroring the 6-byte
+    // comparison for IPv4.
+    bool addr_changed = has_ipv4 != p->has_ipv4
+        || (has_ipv4 && memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0)
+        || ipv6_port != p->ipv6_port;
+    if (addr_changed) {
+        p->has_ipv4 = has_ipv4;
         p->ap = ap;
+        p->ipv6 = ipv6;
+        p->ipv6_port = ipv6_port;
         peer_changed = true;  // Force the full db record so the new address is stored
     }
 
@@ -1221,15 +1256,15 @@ peer_list::iterator worker::add_peer(peer_list &peer_list, const peerkey_t &peer
 }
 */
 
-peer_list::iterator worker::add_leecher(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key) {
-    auto insert = tor.leechers.insert({peer_key, peer(u, ap)});
+peer_list::iterator worker::add_leecher(torrent &tor, user_ptr &u, const addr_port &ap, bool has_ipv4, const std::string &ipv6, const std::string &ipv6_port, const peerkey_t &peer_key) {
+    auto insert = tor.leechers.insert({peer_key, peer(u, ap, has_ipv4, ipv6, ipv6_port)});
     stats.leechers++;
     u->incr_leeching();
     return insert.first;
 }
 
-peer_list::iterator worker::add_seeder(torrent &tor, user_ptr &u, const addr_port &ap, const peerkey_t &peer_key) {
-    auto insert = tor.seeders.insert({peer_key, peer(u, ap)});
+peer_list::iterator worker::add_seeder(torrent &tor, user_ptr &u, const addr_port &ap, bool has_ipv4, const std::string &ipv6, const std::string &ipv6_port, const peerkey_t &peer_key) {
+    auto insert = tor.seeders.insert({peer_key, peer(u, ap, has_ipv4, ipv6, ipv6_port)});
     stats.seeders++;
     u->incr_seeding();
     return insert.first;
