@@ -1400,23 +1400,27 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
         if (revoked_user) {
             // The opt-out must not leave stored IPv6 endpoints behind:
             // append_peer() already filters on the live flag, but the stored
-            // endpoint and the family counter would outlive it until the
-            // peer's next announce. update_users is rare, so the full scan is
-            // acceptable.
-            std::lock_guard<std::mutex> tl_lock(db->torrent_list_mutex);
-            for (auto &t : torrents_list) {
-                auto clear_v6 = [&](peer_list &peers) {
-                    for (auto &p : peers) {
-                        if (p.second.user == revoked_user && !p.second.ipv6.empty()) {
-                            stats.ipv6_peers--;
-                            p.second.ipv6.clear();
-                            p.second.ipv6_port.clear();
+            // endpoints and the family counter would outlive it until the
+            // peer's next announce, which a v6-only client never makes again.
+            // update_users is rare, so the full scan is acceptable.
+            userid_t revoked_id = revoked_user->get_id();
+            {
+                std::lock_guard<std::mutex> tl_lock(db->torrent_list_mutex);
+                for (auto &t : torrents_list) {
+                    auto clear_v6 = [&](peer_list &peers) {
+                        for (auto &p : peers) {
+                            if (p.second.user == revoked_user && !p.second.ipv6.empty()) {
+                                stats.ipv6_peers--;
+                                p.second.ipv6.clear();
+                                p.second.ipv6_port.clear();
+                            }
                         }
-                    }
-                };
-                clear_v6(t.second.leechers);
-                clear_v6(t.second.seeders);
+                    };
+                    clear_v6(t.second.leechers);
+                    clear_v6(t.second.seeders);
+                }
             }
+            db->clear_peer_v6(revoked_id);
         }
     } else if (action == "add_whitelist") {
         std::string peer_id = params["peer_id"];

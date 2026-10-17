@@ -26,6 +26,10 @@ class mysql {
     std::string user_buffer;
 
     std::queue<std::string> peer_queue;
+    // Statements that clear an address from a peer row. They are staged apart
+    // from the announce writes so that they reach peer_queue after them: an
+    // announce already in a buffer must not put the address back.
+    std::queue<std::string> peer_clear_queue;
     std::queue<std::string> snatch_queue;
     std::queue<std::string> token_queue;
     std::queue<std::string> torrent_queue;
@@ -109,6 +113,8 @@ class mysql {
         const uint32_t announces,
         const std::string &peer_id
     );
+
+    void clear_peer_v6(const userid_t user_id);
 
     void record_snatch(
         const userid_t user_id,

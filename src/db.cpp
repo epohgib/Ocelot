@@ -331,6 +331,23 @@ void mysql::record_peer(
     );
 }
 
+/**
+ * Forget every IPv6 endpoint a member has stored, keeping the IPv4 ones: the
+ * opt-in can be revoked between two announces, and the announce path only
+ * stops writing new addresses at that point. The rows are cleared by member
+ * and not by the peers in memory, since the tracker may have restarted since
+ * they were written, and a v6-only client never announces again to correct its
+ * own row. The statement stays behind the announce writes, so a row that was
+ * queued before the revoke cannot put the address back.
+ */
+void mysql::clear_peer_v6(const userid_t user_id) {
+    std::lock_guard<std::mutex> lock(peer_buffer_lock);
+    peer_clear_queue.push(fmt::format(
+        "UPDATE xbt_files_users SET ipv6 = '' WHERE uid = {}",
+        user_id
+    ));
+}
+
 void mysql::record_snatch(
     const userid_t user_id,
     const torid_t torrent_id,
@@ -391,6 +408,7 @@ bool mysql::all_clear() const {
         user_queue.size()       == 0
         && torrent_queue.size() == 0
         && peer_queue.size()    == 0
+        && peer_clear_queue.size() == 0
         && snatch_queue.size()  == 0
         && token_queue.size()   == 0
     );
@@ -513,6 +531,9 @@ void mysql::flush_peers() {
     if (readonly) {
         light_peer_buffer = "";
         heavy_peer_buffer = "";
+        while (!peer_clear_queue.empty()) {
+            peer_clear_queue.pop();
+        }
         return;
     }
     std::lock_guard<std::mutex> pq_lock(peer_queue_lock);
@@ -526,7 +547,7 @@ void mysql::flush_peers() {
     }
 
     // Nothing to do
-    if (light_peer_buffer.empty() && heavy_peer_buffer.empty()) {
+    if (light_peer_buffer.empty() && heavy_peer_buffer.empty() && peer_clear_queue.empty()) {
         return;
     }
 
@@ -574,6 +595,17 @@ void mysql::flush_peers() {
             )
         );
         light_peer_buffer = "";
+    }
+    // After the buffers, so that a clear cannot be overwritten by an announce
+    // that was already waiting to be written
+    while (!peer_clear_queue.empty()) {
+        if (qsize + qsize_added >= 3000) {
+            peer_queue.pop();
+        } else {
+            qsize_added += 1;
+        }
+        peer_queue.push(peer_clear_queue.front());
+        peer_clear_queue.pop();
     }
     stats.peer_queue_size = qsize + qsize_added;
 
