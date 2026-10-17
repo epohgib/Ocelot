@@ -182,7 +182,7 @@ void mysql::load_torrents(torrent_list &torrents) {
 
 void mysql::load_users(user_list &users) {
     mysqlpp::Query query = conn.query(
-        "SELECT ID, can_leech, torrent_pass, (Visible='0' OR IP='127.0.0.1') AS Protected, track_ipv6 FROM users_main WHERE Enabled='1'"
+        "SELECT ID, can_leech, torrent_pass, (Visible <> '1' OR IP='127.0.0.1') AS Protected, track_ipv6 FROM users_main WHERE Enabled='1'"
     );
     try {
         mysqlpp::StoreQueryResult res = query.store();
