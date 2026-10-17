@@ -58,6 +58,7 @@ class connection_mother {
     unsigned int max_connections;
     std::vector<std::string> listen_hosts;
     std::vector<int> listen_sockets;
+    std::string unix_socket_path;  // set when a unix listener is created; unlinked in the destructor
 
     worker * work;
     std::map<int, ev::io*> listen_events;

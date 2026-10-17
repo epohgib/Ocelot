@@ -224,9 +224,27 @@ int connection_mother::create_tcp_server(unsigned int port, const std::string &i
 
 int connection_mother::create_unix_server(const std::string &path) {
     struct sockaddr_un unix_address = {};
+    unix_address.sun_family = AF_UNIX;
+    strncpy(unix_address.sun_path, path.c_str(), sizeof(unix_address.sun_path) - 1);
 
-    // A stale socket file from a previous run would make bind() fail.
-    unlink(path.c_str());
+    // A stale socket file from a previous run would make bind() fail, but
+    // unlinking blindly could steal the socket of a live instance: probe it
+    // first and only clean up a dead socket file. Never touch non-socket
+    // files that happen to sit at the configured path.
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0 && S_ISSOCK(st.st_mode)) {
+        bool alive = false;
+        int probe = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (probe != -1) {
+            alive = connect(probe, reinterpret_cast<struct sockaddr *>(&unix_address), sizeof(unix_address)) == 0;
+            close(probe);
+        }
+        if (alive) {
+            logger->error("unix socket {} is already served by another process", path);
+            return 1;
+        }
+        unlink(path.c_str());
+    }
 
     int new_socket = socket(AF_UNIX, SOCK_STREAM, 0);
     if (new_socket == -1) {
@@ -241,36 +259,33 @@ int connection_mother::create_unix_server(const std::string &path) {
         return 1;
     }
 
-    int yes = 1;
-    if (setsockopt(new_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
-        logger->error("failed to set SO_REUSEADDR on unix socket: {}", strerror(errno));
-        close(new_socket);
-        return 1;
-    }
-
-    unix_address.sun_family = AF_UNIX;
-    strncpy(unix_address.sun_path, path.c_str(), sizeof(unix_address.sun_path) - 1);
-
     if (bind(new_socket, reinterpret_cast<struct sockaddr *>(&unix_address), sizeof(unix_address)) == -1) {
         logger->error("failed to bind unix socket {}: {}", path, strerror(errno));
         close(new_socket);
         return 1;
     }
 
+    // From here on the bind() created the filesystem entry: every failure
+    // must unlink it, or a dead socket file is left behind.
     if (listen(new_socket, max_connections) == -1) {
         logger->error("failed to listen on unix socket {}: {}", path, strerror(errno));
         close(new_socket);
+        unlink(path.c_str());
         return 1;
     }
 
-    if (chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH) == -1) {
+    // 0660: only the tracker's user/group may talk to the socket. It sits in
+    // front of the trusted real-IP header, so it must not be world-writable.
+    if (chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP) == -1) {
         logger->error("chmod on unix socket {} failed: {}", path, strerror(errno));
         close(new_socket);
+        unlink(path.c_str());
         return 1;
     }
 
     logger->info("listening with unix socket on {}", path);
     listen_sockets.push_back(new_socket);
+    unix_socket_path = path;
     return 0;
 }
 
@@ -302,6 +317,9 @@ connection_mother::~connection_mother()
     }
     for (const int listen_socket : listen_sockets) {
         close(listen_socket);
+    }
+    if (!unix_socket_path.empty()) {
+        unlink(unix_socket_path.c_str());
     }
 }
 
