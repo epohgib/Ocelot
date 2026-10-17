@@ -21,7 +21,9 @@ ignore_xff          = false
 real_ip_header      = X-Forwarded-For
 
 # Accept announces from IPv6 peers (BEP 07). Disabled by default; only
-# users with track_ipv6 enabled on the site are recorded over IPv6
+# users with track_ipv6 enabled on the site are recorded over IPv6.
+# When disabled, keep IPv6 addresses out of listen_host: the listener would
+# still accept the connections but every announce over them is rejected.
 enable_ipv6         = false
 
 announce_interval   = 1800
