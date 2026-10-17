@@ -123,3 +123,8 @@ prevent the database peer tables from being reset.
 
 * `SIGHUP` - Reload config
 * `SIGUSR1` - Reload torrent list, user list and client whitelist
+
+The user list (protection, leech status, `track_ipv6`) is read from the
+database only at startup and on `SIGUSR1`; there is no periodic reload. A change
+made directly to `users_main`, instead of being pushed through the `update_user`
+API action, therefore takes effect only after a reload.

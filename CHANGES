@@ -1,5 +1,11 @@
 -- 3.2.1 (unreleased)
 BUGFIXES
+* update_user no longer resets fields it does not carry: an update with only
+  can_leech (or only track_ipv6) used to drop the user's IP protection, which
+  then stayed lost until the next user-list reload.
+* The Protected flag now treats any Visible value other than '1' as protected,
+  so the widened enum values ('yes'/'no') no longer expose a user who believes
+  to be invisible.
 * stats.ipv4_peers and stats.ipv6_peers no longer drift when a peer entry is
   removed by remove_seeder() or drops with a torrent list reload.
 * A re-snatch now updates the legacy IP column together with tstamp and the

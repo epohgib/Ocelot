@@ -337,6 +337,13 @@ existing users are not tracked on IPv6 until they opt in.
   `update_user` API action (`worker.cpp:1062-1098`), extended with a
   `track_ipv6` parameter; `add_user` (`worker.cpp:1017-1030`) defaults it
   to false.
+  `update_user` applies only the parameters it carries: an absent
+  `visible`/`can_leech`/`track_ipv6` leaves the corresponding in-memory
+  field untouched, so a partial update cannot silently drop the
+  protection. `add_user` is the only action where an absent
+  `visible`/`can_leech` means the default (not protected, leeching
+  allowed). The in-memory user state is refreshed only at startup and on
+  `SIGUSR1`; a direct change to `users_main` needs a reload.
 - Worker: the `worker::announce` pipeline is **parse → validate (drop
   invalid values individually) → emptiness check → opt-in clearing**,
   i.e. the emptiness check runs against the addresses that survive both
