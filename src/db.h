@@ -94,7 +94,10 @@ class mysql {
         const int64_t corrupt,
         const uint32_t seed_time,
         const uint32_t announces,
-        const std::string &addr,
+        const std::string &ip,
+        const std::string &ipv4,
+        const std::string &ipv6,
+        const uint16_t port,
         const std::string &peer_id,
         const std::string &useragent
     );
@@ -110,7 +113,9 @@ class mysql {
     void record_snatch(
         const userid_t user_id,
         const torid_t torrent_id,
-        const std::string &addr
+        const std::string &ip,
+        const std::string &ipv4,
+        const std::string &ipv6
     );
 
     void record_token(

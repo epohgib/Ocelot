@@ -188,6 +188,8 @@ int main(int argc, char **argv) {
     stats.request_rate = 0;
     stats.leechers = 0;
     stats.seeders = 0;
+    stats.ipv4_peers = 0;
+    stats.ipv6_peers = 0;
     stats.user_queue_size = 0;
     stats.torrent_queue_size = 0;
     stats.peer_queue_size = 0;

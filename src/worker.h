@@ -64,6 +64,7 @@ class worker {
     uint32_t peers_timeout;
     uint32_t numwant_limit;
     bool keepalive_enabled;
+    bool enable_ipv6;
     std::string site_password;
     std::string report_password;
 

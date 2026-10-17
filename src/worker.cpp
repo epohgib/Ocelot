@@ -60,6 +60,7 @@ void worker::load_config(config * conf) {
     peers_timeout       = conf->get_uint("peers_timeout");
     numwant_limit       = conf->get_uint("numwant_limit");
     keepalive_enabled   = conf->get_uint("keepalive_timeout") != 0;
+    enable_ipv6         = conf->get_bool("enable_ipv6");
     site_password       = conf->get_str("site_password");
     report_password     = conf->get_str("report_password");
     jitter              = std::uniform_int_distribution<int>(0, conf->get_uint("announce_jitter"));
@@ -91,6 +92,13 @@ bool worker::shutdown() {
 }
 
 std::string worker::work(const std::string &input, const client_addr_t &remote_addr, client_opts_t &client_opts) {
+    // The listener always accepts IPv6; the worker refuses it unless the
+    // feature is enabled (D7). A forwarded IPv6 header is checked below.
+    if (!enable_ipv6 && remote_addr.family == AF_INET6) {
+        stats.client_error++;
+        return error("IPv6 tracking is disabled", client_opts);
+    }
+
     unsigned int input_length = input.length();
 
     //---------- Parse request - ugly but fast. Using substr exploded.
@@ -400,9 +408,11 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
                 if (res->ai_family == AF_INET) {
                     client_addr = {ip, AF_INET};
                 } else if (res->ai_family == AF_INET6) {
-                    // Parsed and carried, but nothing consumes IPv6 yet: fall
-                    // back to the socket address.
-                    logger->warn("IPv6 X-Forwarded-For ({}) is not tracked yet, using the socket address", ip);
+                    if (!enable_ipv6) {
+                        stats.client_error++;
+                        return error("IPv6 tracking is disabled", client_opts);
+                    }
+                    client_addr = {ip, AF_INET6};
                 }
                 freeaddrinfo(res);
             }
@@ -434,6 +444,9 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
         if (family == client_addr.family) {
             continue;
         }
+        if (family == AF_INET6 && !enable_ipv6) {
+            continue;
+        }
 
         bool is_public = false;
         if (family == AF_INET) {
@@ -454,6 +467,58 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
         client_addr.alt_family = family;
         logger->debug("accepted {} announce parameter: {}", param_name, ip);
         break;
+    }
+
+    // Validate the address(es) we would record and apply the per-user IPv6
+    // opt-in. Order matters (D21): drop each invalid address first, then decide
+    // whether anything is left to track.
+    bool valid_ipv4 = false;
+    bool valid_ipv6 = false;
+    if (client_addr.family == AF_INET) {
+        in_addr v4 = {};
+        inet_pton(AF_INET, client_addr.ip.c_str(), &v4);
+        valid_ipv4 = ipv4_is_public(v4);
+        if (!valid_ipv4) {
+            logger->debug("dropping non-public announce address: {}", client_addr.ip);
+            client_addr.family = AF_UNSPEC;
+            client_addr.ip.clear();
+        }
+    } else if (client_addr.family == AF_INET6) {
+        in6_addr v6 = {};
+        inet_pton(AF_INET6, client_addr.ip.c_str(), &v6);
+        valid_ipv6 = ipv6_is_public(v6);
+        if (!valid_ipv6) {
+            logger->debug("dropping non-public announce address: {}", client_addr.ip);
+            client_addr.family = AF_UNSPEC;
+            client_addr.ip.clear();
+        }
+    }
+    // The alternate address was already validated when it was parsed.
+    if (client_addr.alt_family == AF_INET) {
+        valid_ipv4 = true;
+    } else if (client_addr.alt_family == AF_INET6) {
+        valid_ipv6 = true;
+    }
+
+    // A peer always keeps at least one address. An IPv6-only client whose owner
+    // has not opted in gets a dedicated error, never "Invalid IP detected" and
+    // never an address-less peer (D21).
+    if (!valid_ipv4 && !(valid_ipv6 && u->track_ipv6())) {
+        stats.client_error++;
+        if (valid_ipv6) {
+            return error("IPv6 tracking is disabled for your account; enable it in your profile", client_opts);
+        }
+        return error("Invalid IP detected", client_opts);
+    }
+    if (!u->track_ipv6()) {
+        if (client_addr.family == AF_INET6) {
+            client_addr.family = AF_UNSPEC;
+            client_addr.ip.clear();
+        }
+        if (client_addr.alt_family == AF_INET6) {
+            client_addr.alt_family = AF_UNSPEC;
+            client_addr.alt_ip.clear();
+        }
     }
 
     // Trust the port given by the client.
@@ -748,6 +813,21 @@ std::string worker::announce(
         || (has_ipv4 && memcmp(&ap.addr_port, &p->ap.addr_port, sizeof(ap.addr_port)) != 0)
         || ipv6_port != p->ipv6_port;
     if (addr_changed) {
+        // Keep the family counters in sync with the peer's address set.
+        if (has_ipv4 != p->has_ipv4) {
+            if (has_ipv4) {
+                stats.ipv4_peers++;
+            } else {
+                stats.ipv4_peers--;
+            }
+        }
+        if (ipv6.empty() != p->ipv6.empty()) {
+            if (ipv6.empty()) {
+                stats.ipv6_peers--;
+            } else {
+                stats.ipv6_peers++;
+            }
+        }
         p->has_ipv4 = has_ipv4;
         p->ap = ap;
         p->ipv6 = ipv6;
@@ -758,13 +838,34 @@ std::string worker::announce(
     // Update the peer
     p->last_announced = cur_time;
 
+    // Stage 1 of the migration writes the binary addresses next to the legacy
+    // textual `ip` (D22): the latter gets the IPv4 in dotted form when there is
+    // one and stays empty otherwise, so a v6-only peer has ip = ''. Only
+    // validated bytes are formatted, never client text.
+    std::string legacy_ip = "''";
+    std::string ipv4_literal = "''";
+    std::string ipv6_literal = "''";
+    if (!u->is_protected()) {
+        if (has_ipv4) {
+            char v4_text[INET_ADDRSTRLEN] = {0};
+            in_addr v4 = {};
+            v4.s_addr = ap.addr;
+            inet_ntop(AF_INET, &v4, v4_text, sizeof(v4_text));
+            legacy_ip = std::string("'") + v4_text + "'";
+            ipv4_literal = "X'" + bintohex(std::string(reinterpret_cast<const char *>(&ap.addr), sizeof(ap.addr))) + "'";
+        }
+        if (!ipv6.empty()) {
+            ipv6_literal = "X'" + bintohex(ipv6) + "'";
+        }
+    }
+
     // Add peer data to the database
     if (peer_changed) {
         db->record_peer(
             userid, tor.id, active,
             ctx->uploaded, ctx->downloaded, upspeed, downspeed, ctx->left, ctx->corrupt,
             cur_time - p->first_announced, p->announces,
-            u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')',
+            legacy_ip, ipv4_literal, ipv6_literal, remote_port,
             peer_id, ctx->useragent
         );
     } else {
@@ -784,7 +885,7 @@ std::string worker::announce(
         db->record_snatch(
             userid,
             tor.id,
-            u->is_protected() ? "''" : "inet_ntoa(" + std::to_string(ntohl(ap.addr)) + ')'
+            legacy_ip, ipv4_literal, ipv6_literal
         );
 
         // User is a seeder now!
@@ -818,6 +919,7 @@ std::string worker::announce(
                     if (
                         !user->is_deleted()
                         && !user->is_protected()
+                        && it.second.has_ipv4
                         && user->get_id() != userid
                     ) {
                         peers.append(it.second.ap.addr_port, sizeof(ap.addr_port));
@@ -838,6 +940,7 @@ std::string worker::announce(
                     if (
                         !it->second.user->is_deleted()
                         && !it->second.user->is_protected()
+                        && it->second.has_ipv4
                         && it->second.user->get_id() != userid
                     ) {
                         peers.append(it->second.ap.addr_port, sizeof(ap.addr_port));
@@ -863,6 +966,7 @@ std::string worker::announce(
                 if (
                     !it->second.user->is_deleted()
                     && it->second.user->can_leech()
+                    && it->second.has_ipv4
                     && it->second.user->get_id() != userid
                 ) {
                     peers.append(it->second.ap.addr_port, sizeof(ap.addr_port));
@@ -888,6 +992,13 @@ std::string worker::announce(
 
     // Remove peers as late as possible to prevent access problems.
     if (ctx->event_stopped) {
+        // Read the family flags before erasing: `p` is invalidated below.
+        if (p->has_ipv4) {
+            stats.ipv4_peers--;
+        }
+        if (!p->ipv6.empty()) {
+            stats.ipv6_peers--;
+        }
         if (ctx->left > 0) {
             tor.leechers.erase(peer_it);
             stats.leechers--;
@@ -1109,9 +1220,21 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
             stats.seeders -= torrent_it->second.seeders.size();
             for (auto &p : torrent_it->second.leechers) {
                 p.second.user->decr_leeching();
+                if (p.second.has_ipv4) {
+                    stats.ipv4_peers--;
+                }
+                if (!p.second.ipv6.empty()) {
+                    stats.ipv6_peers--;
+                }
             }
             for (auto &p : torrent_it->second.seeders) {
                 p.second.user->decr_seeding();
+                if (p.second.has_ipv4) {
+                    stats.ipv4_peers--;
+                }
+                if (!p.second.ipv6.empty()) {
+                    stats.ipv6_peers--;
+                }
             }
             std::lock_guard<std::mutex> dr_lock(del_reasons_lock);
             del_message msg;
@@ -1129,7 +1252,8 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
         auto u = users_list.find(passkey);
         if (u == users_list.end()) {
             bool protect_ip = params["visible"] == "0";
-            user_ptr tmp_user = std::make_shared<user>(userid, true, protect_ip);
+            bool track_ipv6 = params["track_ipv6"] == "1";
+            user_ptr tmp_user = std::make_shared<user>(userid, true, protect_ip, track_ipv6);
             users_list.insert(std::pair<std::string, user_ptr>(passkey, tmp_user));
             logger->info("added user {} with id {}", passkey, userid);
         } else {
@@ -1177,6 +1301,7 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
         if (params["visible"] == "0") {
             protect_ip = true;
         }
+        auto track_ipv6_it = params.find("track_ipv6");
         std::lock_guard<std::mutex> ul_lock(db->user_list_mutex);
         user_list::iterator i = users_list.find(passkey);
         if (i == users_list.end()) {
@@ -1187,9 +1312,12 @@ std::string worker::update(params_type &params, const client_opts_t &client_opts
         } else {
             i->second->set_protected(protect_ip);
             i->second->set_leechstatus(can_leech);
+            if (track_ipv6_it != params.end()) {
+                i->second->set_track_ipv6(track_ipv6_it->second == "1");
+            }
             logger->info(
-                "updated user {} protect({}) leech({})",
-                passkey, protect_ip, can_leech
+                "updated user {} protect({}) leech({}) track_ipv6({})",
+                passkey, protect_ip, can_leech, i->second->track_ipv6()
             );
         }
     } else if (action == "add_whitelist") {
@@ -1260,6 +1388,12 @@ peer_list::iterator worker::add_leecher(torrent &tor, user_ptr &u, const addr_po
     auto insert = tor.leechers.insert({peer_key, peer(u, ap, has_ipv4, ipv6, ipv6_port)});
     stats.leechers++;
     u->incr_leeching();
+    if (has_ipv4) {
+        stats.ipv4_peers++;
+    }
+    if (!ipv6.empty()) {
+        stats.ipv6_peers++;
+    }
     return insert.first;
 }
 
@@ -1267,6 +1401,12 @@ peer_list::iterator worker::add_seeder(torrent &tor, user_ptr &u, const addr_por
     auto insert = tor.seeders.insert({peer_key, peer(u, ap, has_ipv4, ipv6, ipv6_port)});
     stats.seeders++;
     u->incr_seeding();
+    if (has_ipv4) {
+        stats.ipv4_peers++;
+    }
+    if (!ipv6.empty()) {
+        stats.ipv6_peers++;
+    }
     return insert.first;
 }
 
@@ -1334,6 +1474,8 @@ void worker::reap_peers() {
     uint32_t total_torrent    = 0;
     uint32_t total_seeder     = 0;
     uint32_t total_leecher    = 0;
+    uint32_t total_ipv4       = 0;
+    uint32_t total_ipv6       = 0;
 
     std::chrono::steady_clock::time_point lock_begin;
     std::chrono::steady_clock::time_point lock_end;
@@ -1350,8 +1492,14 @@ void worker::reap_peers() {
             bool reaped_this = false;  // True if at least one peer was deleted from the current torrent
             auto p = t->second.leechers.begin();
             while (p != t->second.leechers.end()) {
-                total_leecher++;
                 if (p->second.last_announced > max_time) {
+                    total_leecher++;
+                    if (p->second.has_ipv4) {
+                        total_ipv4++;
+                    }
+                    if (!p->second.ipv6.empty()) {
+                        total_ipv6++;
+                    }
                     p++;
                 } else {
                     p->second.user->decr_leeching();
@@ -1362,8 +1510,14 @@ void worker::reap_peers() {
             }
             p = t->second.seeders.begin();
             while (p != t->second.seeders.end()) {
-                total_seeder++;
                 if (p->second.last_announced > max_time) {
+                    total_seeder++;
+                    if (p->second.has_ipv4) {
+                        total_ipv4++;
+                    }
+                    if (!p->second.ipv6.empty()) {
+                        total_ipv6++;
+                    }
                     p++;
                 } else {
                     p->second.user->decr_seeding();
@@ -1391,6 +1545,8 @@ void worker::reap_peers() {
     uint32_t old_seed  = stats.seeders;
     stats.leechers     = total_leecher;
     stats.seeders      = total_seeder;
+    stats.ipv4_peers   = total_ipv4;
+    stats.ipv6_peers   = total_ipv6;
     stats.reap_lock_duration.fetch_add(
         lock_duration.count()
     );

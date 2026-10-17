@@ -87,6 +87,8 @@ struct stats_t {
     std::atomic<uint64_t> connection_rate;
     std::atomic<uint32_t> leechers;
     std::atomic<uint32_t> seeders;
+    std::atomic<uint32_t> ipv4_peers;
+    std::atomic<uint32_t> ipv6_peers;
     std::atomic<uint32_t> user_queue_size;
     std::atomic<uint32_t> torrent_queue_size;
     std::atomic<uint32_t> peer_queue_size;

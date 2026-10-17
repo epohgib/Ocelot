@@ -101,6 +101,8 @@ std::string report(const uint32_t announce_interval, const uint32_t announce_jit
         << ITEM_NUM("scrapes", stats.scrapes) << ','
         << ITEM_NUM("leechers tracked", stats.leechers) << ','
         << ITEM_NUM("seeders tracked", stats.seeders) << ','
+        << ITEM_NUM("ipv4 peers", stats.ipv4_peers) << ','
+        << ITEM_NUM("ipv6 peers", stats.ipv6_peers) << ','
         << ITEM_NUM("announce duration", stats.announce_duration) << ','
         << ITEM_NUM("torrent lock total", stats.torrent_lock_total) << ','
         << ITEM_NUM("torrent lock duration", stats.torrent_lock_duration) << ','
@@ -169,6 +171,8 @@ std::string report_prom_stats(const char *jemalloc_stats) {
         "ocelot_scrapes "             << stats.scrapes << "\n"
         "ocelot_leechers "            << stats.leechers << "\n"
         "ocelot_seeders "             << stats.seeders << "\n"
+        "ocelot_ipv4_peers "         << stats.ipv4_peers << "\n"
+        "ocelot_ipv6_peers "         << stats.ipv6_peers << "\n"
         "ocelot_user_queue "          << stats.user_queue_size << "\n"
         "ocelot_torrent_queue "       << stats.torrent_queue_size << "\n"
         "ocelot_peer_queue "          << stats.peer_queue_size << "\n"

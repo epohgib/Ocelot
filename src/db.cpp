@@ -170,7 +170,7 @@ void mysql::load_torrents(torrent_list &torrents) {
 
 void mysql::load_users(user_list &users) {
     mysqlpp::Query query = conn.query(
-        "SELECT ID, can_leech, torrent_pass, (Visible='0' OR IP='127.0.0.1') AS Protected FROM users_main WHERE Enabled='1'"
+        "SELECT ID, can_leech, torrent_pass, (Visible='0' OR IP='127.0.0.1') AS Protected, track_ipv6 FROM users_main WHERE Enabled='1'"
     );
     try {
         mysqlpp::StoreQueryResult res = query.store();
@@ -189,12 +189,14 @@ void mysql::load_users(user_list &users) {
         for (size_t i = 0; i < num_rows; i++) {
             std::string passkey(res[i][2]);
             bool protect_ip = res[i][3];
-            user_ptr tmp_user = std::make_shared<user>(res[i][0], res[i][1], protect_ip);
+            bool track_ipv6 = res[i][4];
+            user_ptr tmp_user = std::make_shared<user>(res[i][0], res[i][1], protect_ip, track_ipv6);
             auto it = users.insert(std::pair<std::string, user_ptr>(passkey, tmp_user));
             if (!it.second) {
                 user_ptr &u = (it.first)->second;
                 u->set_leechstatus(res[i][1]);
                 u->set_protected(protect_ip);
+                u->set_track_ipv6(track_ipv6);
                 u->set_deleted(false);
                 cur_keys.erase(passkey);
             }
@@ -281,7 +283,10 @@ void mysql::record_peer(
     const int64_t corrupt,
     const uint32_t seed_time,
     const uint32_t announces,
-    const std::string &addr,
+    const std::string &ip,
+    const std::string &ipv4,
+    const std::string &ipv6,
+    const uint16_t port,
     const std::string &peer_id,
     const std::string &useragent
 ) {
@@ -290,11 +295,11 @@ void mysql::record_peer(
         std::back_inserter(heavy_peer_buffer),
         "({},{},{},"
         "{},{},{},{},{},{},"
-        "{},{},{},"
-        "{},{},{}),",
+        "{},{},{},{},{},"
+        "{},{},{},{}),",
         user_id, torrent_id, active ? 1 : 0,
         uploaded, downloaded, upspeed, downspeed, left, corrupt,
-        seed_time, announces, addr,
+        seed_time, announces, ip, ipv4, ipv6, port,
         escape(peer_id), escape(useragent), time(NULL)
     );
 }
@@ -317,13 +322,15 @@ void mysql::record_peer(
 void mysql::record_snatch(
     const userid_t user_id,
     const torid_t torrent_id,
-    const std::string &addr
+    const std::string &ip,
+    const std::string &ipv4,
+    const std::string &ipv6
 ) {
     std::lock_guard<std::mutex> lock(snatch_buffer_lock);
     fmt::format_to(
         std::back_inserter(snatch_buffer),
-        "({},{},{},{}),",
-        user_id, torrent_id, time(NULL), addr
+        "({},{},{},{},{},{}),",
+        user_id, torrent_id, time(NULL), ip, ipv4, ipv6
     );
 }
 
@@ -475,7 +482,8 @@ void mysql::flush_snatches() {
     snatch_buffer.pop_back();
     snatch_queue.push(
         fmt::format(
-            "INSERT IGNORE INTO xbt_snatched(uid,fid,tstamp,IP)VALUES{}",
+            "INSERT INTO xbt_snatched(uid,fid,tstamp,IP,ipv4,ipv6)VALUES{}"
+            "ON DUPLICATE KEY UPDATE tstamp=VALUES(tstamp),ipv4=VALUES(ipv4),ipv6=VALUES(ipv6)",
             snatch_buffer
         )
     );
@@ -522,13 +530,14 @@ void mysql::flush_peers() {
         heavy_peer_buffer.pop_back();
         peer_queue.push(
             fmt::format(
-                "INSERT INTO xbt_files_users(uid,fid,active,uploaded,downloaded,upspeed,downspeed,remaining,corrupt,timespent,announced,ip,peer_id,useragent,mtime)VALUES"
+                "INSERT INTO xbt_files_users(uid,fid,active,uploaded,downloaded,upspeed,downspeed,remaining,corrupt,timespent,announced,ip,ipv4,ipv6,port,peer_id,useragent,mtime)VALUES"
                 "{}"
                 "ON DUPLICATE KEY UPDATE active=VALUES(active),uploaded=VALUES(uploaded),"
                 "downloaded=VALUES(downloaded),upspeed=VALUES(upspeed),"
                 "downspeed=VALUES(downspeed),remaining=VALUES(remaining),"
                 "corrupt=VALUES(corrupt),timespent=VALUES(timespent),"
-                "announced=VALUES(announced),mtime=VALUES(mtime)",
+                "announced=VALUES(announced),mtime=VALUES(mtime),"
+                "ip=VALUES(ip),ipv4=VALUES(ipv4),ipv6=VALUES(ipv6),port=VALUES(port)",
                 heavy_peer_buffer
             )
         );
