@@ -3,6 +3,9 @@
 # A # anywhere else is treated like any other character
 
 listen_port         = 34000
+# Interfaces to listen on: '*' (all interfaces, both families), a
+# space-separated list of addresses (e.g. "0.0.0.0 ::") or unix:/path.sock
+listen_host         = *
 max_connections     = 128
 max_middlemen       = 20000
 max_read_buffer     = 4096

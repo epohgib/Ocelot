@@ -57,6 +57,7 @@ config::config() {
 void config::init() {
     // Internal stuff
     add("listen_port", 34000u);
+    add("listen_host", "*");
     add("max_connections", 1024u);
     add("max_middlemen", 20000u);
     add("max_read_buffer", 4096u);

@@ -78,6 +78,16 @@ std::string bintohex(const std::string &in) {
     return out;
 }
 
+std::vector<std::string> split(const std::string &s, char delim) {
+    std::vector<std::string> elems;
+    std::istringstream stream(s);
+    std::string item;
+    while (std::getline(stream, item, delim)) {
+        elems.push_back(item);
+    }
+    return elems;
+}
+
 namespace {
 
 // Compares the leading `length` bytes of an address against a prefix.

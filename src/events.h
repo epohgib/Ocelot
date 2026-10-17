@@ -23,8 +23,10 @@
 
 #include <iostream>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "config.h"
 #include "worker.h"
@@ -54,10 +56,11 @@ class connection_mother {
     void load_config(config * conf);
     unsigned int listen_port;
     unsigned int max_connections;
+    std::vector<std::string> listen_hosts;
+    std::vector<int> listen_sockets;
 
-    int listen_socket;
     worker * work;
-    ev::io listen_event;
+    std::map<int, ev::io*> listen_events;
     ev::timer schedule_event;
     std::shared_ptr<spdlog::logger> logger;
 
@@ -66,6 +69,8 @@ class connection_mother {
     ~connection_mother();
     void reload_config(config * conf);
     int create_listen_socket();
+    int create_tcp_server(unsigned int port, const std::string &bindaddr);
+    int create_unix_server(const std::string &path);
     void run();
     void handle_connect(ev::io &watcher, int events_flags);
 

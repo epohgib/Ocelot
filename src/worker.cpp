@@ -419,6 +419,13 @@ std::string worker::work(const std::string &input, const client_addr_t &remote_a
         }
     }
 
+    // A unix socket has no address of its own: the announce must carry one in
+    // X-Forwarded-For (trusted above) or nothing can be tracked.
+    if (client_addr.family == AF_UNIX) {
+        stats.client_error++;
+        return error("No client address: a Unix socket connection requires the X-Forwarded-For header", client_opts);
+    }
+
     // BEP 03/07: the client may advertise its address of the other family with
     // ipv6= / ipv4= / ip=. Such a parameter may only fill the family the
     // connection did not come from: the observed address stays authoritative

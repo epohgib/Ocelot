@@ -3,11 +3,15 @@
 #include <spdlog/spdlog.h>
 
 #include <cerrno>
+#include <netdb.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 
 #include "ocelot.h"
 #include "config.h"
 #include "db.h"
 #include "worker.h"
+#include "misc_functions.h"
 #include "schedule.h"
 #include "response.h"
 #include "events.h"
@@ -22,16 +26,19 @@ connection_mother::connection_mother(config * conf, worker * w, site_comm * sc_o
     // Handle config stuff first
     load_config(conf);
 
-    listen_socket = create_listen_socket();
-
-    // We failed to create the socket, so no point in running Ocelot
-    if (listen_socket == 0) {
+    // We failed to create any socket, so no point in running Ocelot
+    if (create_listen_socket() != 0) {
         logger->critical("failed to create listen socket for Ocelot, exiting");
         exit(1);
     }
 
-    listen_event.set<connection_mother, &connection_mother::handle_connect>(this);
-    listen_event.start(listen_socket, ev::READ);
+    for (const int listen_socket : listen_sockets) {
+        auto *listen_event = new ev::io;
+        listen_event->set<connection_mother, &connection_mother::handle_connect>(this);
+        listen_event->start(listen_socket, ev::READ);
+        listen_events[listen_socket] = listen_event;
+    }
+
     // Create libev timer
     schedule_event.set<schedule, &schedule::handle>(sched);
     schedule_event.start(sched->schedule_interval, sched->schedule_interval);  // After interval, every interval
@@ -39,6 +46,7 @@ connection_mother::connection_mother(config * conf, worker * w, site_comm * sc_o
 
 void connection_mother::load_config(config * conf) {
     listen_port        = conf->get_uint("listen_port");
+    listen_hosts       = split(conf->get_str("listen_host"), ' ');
     max_connections    = conf->get_uint("max_connections");
     max_middlemen      = conf->get_uint("max_middlemen");
     connection_timeout = conf->get_uint("connection_timeout");
@@ -50,66 +58,220 @@ void connection_mother::load_config(config * conf) {
 void connection_mother::reload_config(config * conf) {
     unsigned int old_listen_port = listen_port;
     unsigned int old_max_connections = max_connections;
+    std::vector<std::string> old_listen_hosts = listen_hosts;
     load_config(conf);
-    if (old_listen_port != listen_port) {
-        logger->info(
-            "changing listen port from {} to {}",
-            old_listen_port, listen_port
-        );
-        int new_listen_socket = create_listen_socket();
-        if (new_listen_socket != 0) {
-            listen_event.stop();
-            listen_event.start(new_listen_socket, ev::READ);
-            close(listen_socket);
-            listen_socket = new_listen_socket;
-        } else {
-            logger->error("failed to create new listen socket when reloading config");
+
+    if (old_listen_port == listen_port && old_listen_hosts == listen_hosts) {
+        if (old_max_connections != max_connections) {
+            for (const int listen_socket : listen_sockets) {
+                listen(listen_socket, max_connections);
+            }
         }
-    } else if (old_max_connections != max_connections) {
-        listen(listen_socket, max_connections);
+        return;
+    }
+
+    logger->info(
+        "listen configuration changed (port {} => {}), rebuilding listen sockets",
+        old_listen_port, listen_port
+    );
+
+    // Tear the old listeners down first: binding a new socket on the same port
+    // while the old one is still open fails with EADDRINUSE.
+    for (auto const &entry : listen_events) {
+        entry.second->stop();
+        delete entry.second;
+    }
+    listen_events.clear();
+    std::vector<int> old_listen_sockets = listen_sockets;
+    listen_sockets.clear();
+    for (const int listen_socket : old_listen_sockets) {
+        close(listen_socket);
+    }
+
+    if (create_listen_socket() != 0) {
+        // Put the previous configuration back rather than running deaf.
+        logger->error("failed to rebuild listen sockets, restoring the previous configuration");
+        for (const int listen_socket : listen_sockets) {
+            close(listen_socket);
+        }
+        listen_sockets.clear();
+        listen_port = old_listen_port;
+        listen_hosts = old_listen_hosts;
+        if (create_listen_socket() != 0) {
+            logger->critical("failed to restore listen sockets, no listener is active");
+            return;
+        }
+    }
+
+    for (const int listen_socket : listen_sockets) {
+        auto *listen_event = new ev::io;
+        listen_event->set<connection_mother, &connection_mother::handle_connect>(this);
+        listen_event->start(listen_socket, ev::READ);
+        listen_events[listen_socket] = listen_event;
     }
 }
 
 int connection_mother::create_listen_socket() {
-    sockaddr_in address = {0};
-    int new_listen_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_hosts.empty()) {
+        listen_hosts.push_back("*");
+    }
 
-    // Stop old sockets from hogging the port
+    bool listening = false;
+    for (const std::string &listen_host : listen_hosts) {
+        if (listen_host.empty()) {
+            continue;
+        }
+        if (listen_host.compare(0, 5, "unix:") == 0) {
+            if (create_unix_server(listen_host.substr(5)) != 0) {
+                continue;
+            }
+        } else if (create_tcp_server(listen_port, listen_host) != 0) {
+            continue;
+        }
+        listening = true;
+    }
+
+    if (!listening) {
+        logger->critical("configured to not listen anywhere");
+        return 1;
+    }
+    return 0;
+}
+
+int connection_mother::create_tcp_server(unsigned int port, const std::string &ip) {
+    struct addrinfo hints = {};
+    struct addrinfo *res = nullptr;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    const char *bindaddr = (ip.empty() || ip == "*") ? nullptr : ip.c_str();
+
+    std::string port_str = std::to_string(port);
+    int err = getaddrinfo(bindaddr, port_str.c_str(), &hints, &res);
+    if (err != 0) {
+        logger->error("failed to resolve listen host '{}': {}", ip, gai_strerror(err));
+        return 1;
+    }
+
+    int created = 0;
+    for (struct addrinfo *p = res; p != nullptr; p = p->ai_next) {
+        int new_socket = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (new_socket == -1) {
+            logger->warn("failed to open socket for listen host '{}': {}", ip, strerror(errno));
+            continue;
+        }
+
+#if defined IPV6_V6ONLY
+        // One socket per family: the IPv4 and IPv6 listeners must not overlap.
+        if (p->ai_family == AF_INET6) {
+            int yes = 1;
+            if (setsockopt(new_socket, IPPROTO_IPV6, IPV6_V6ONLY, &yes, sizeof(yes)) == -1) {
+                logger->warn("failed to set IPV6_V6ONLY: {}", strerror(errno));
+                close(new_socket);
+                continue;
+            }
+        }
+#endif
+
+        int yes = 1;
+        if (setsockopt(new_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+            logger->warn("failed to set SO_REUSEADDR: {}", strerror(errno));
+            close(new_socket);
+            continue;
+        }
+
+        int flags = fcntl(new_socket, F_GETFL);
+        if (flags == -1 || fcntl(new_socket, F_SETFL, flags | O_NONBLOCK) == -1) {
+            logger->warn("failed to set listen socket non-blocking: {}", strerror(errno));
+            close(new_socket);
+            continue;
+        }
+
+        if (bind(new_socket, p->ai_addr, p->ai_addrlen) == -1) {
+            logger->warn("failed to bind listen socket: {}", strerror(errno));
+            close(new_socket);
+            continue;
+        }
+
+        if (listen(new_socket, max_connections) == -1) {
+            logger->warn("failed to listen on socket: {}", strerror(errno));
+            close(new_socket);
+            continue;
+        }
+
+        char ip_value[INET6_ADDRSTRLEN] = {0};
+        if (p->ai_family == AF_INET) {
+            struct sockaddr_in *s = reinterpret_cast<struct sockaddr_in *>(p->ai_addr);
+            inet_ntop(AF_INET, &s->sin_addr, ip_value, sizeof(ip_value));
+            logger->info("listening with IPv4 socket on {}:{}", ip_value, port);
+        } else {
+            struct sockaddr_in6 *s6 = reinterpret_cast<struct sockaddr_in6 *>(p->ai_addr);
+            inet_ntop(AF_INET6, &s6->sin6_addr, ip_value, sizeof(ip_value));
+            logger->info("listening with IPv6 socket on [{}]:{}", ip_value, port);
+        }
+
+        listen_sockets.push_back(new_socket);
+        created++;
+    }
+    freeaddrinfo(res);
+
+    if (created == 0) {
+        logger->error("failed to bind any socket for listen host '{}'", ip);
+        return 1;
+    }
+    return 0;
+}
+
+int connection_mother::create_unix_server(const std::string &path) {
+    struct sockaddr_un unix_address = {};
+
+    // A stale socket file from a previous run would make bind() fail.
+    unlink(path.c_str());
+
+    int new_socket = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (new_socket == -1) {
+        logger->error("failed to open unix socket: {}", strerror(errno));
+        return 1;
+    }
+
+    int flags = fcntl(new_socket, F_GETFL);
+    if (flags == -1 || fcntl(new_socket, F_SETFL, flags | O_NONBLOCK) == -1) {
+        logger->error("failed to set unix socket non-blocking: {}", strerror(errno));
+        close(new_socket);
+        return 1;
+    }
+
     int yes = 1;
-    if (setsockopt(new_listen_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-        logger->error("failed to reuse socket: {}", strerror(errno));
-        return 0;
+    if (setsockopt(new_socket, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+        logger->error("failed to set SO_REUSEADDR on unix socket: {}", strerror(errno));
+        close(new_socket);
+        return 1;
     }
 
-    // Get ready to bind
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(listen_port);
+    unix_address.sun_family = AF_UNIX;
+    strncpy(unix_address.sun_path, path.c_str(), sizeof(unix_address.sun_path) - 1);
 
-    // Bind
-    if (bind(new_listen_socket, reinterpret_cast<struct sockaddr*>(&address), sizeof(address)) == -1) {
-        logger->error("failed to bind to listen socket: {}", strerror(errno));
-        return 0;
+    if (bind(new_socket, reinterpret_cast<struct sockaddr *>(&unix_address), sizeof(unix_address)) == -1) {
+        logger->error("failed to bind unix socket {}: {}", path, strerror(errno));
+        close(new_socket);
+        return 1;
     }
 
-    // Listen
-    if (listen(new_listen_socket, max_connections) == -1) {
-        logger->error("failed to listen on socket: {}", strerror(errno));
-        return 0;
+    if (listen(new_socket, max_connections) == -1) {
+        logger->error("failed to listen on unix socket {}: {}", path, strerror(errno));
+        close(new_socket);
+        return 1;
     }
 
-    // Set non-blocking
-    int flags = fcntl(new_listen_socket, F_GETFL);
-    if (flags == -1) {
-        logger->error("failed to read socket flags: {}", strerror(errno));
-        return 0;
-    }
-    if (fcntl(new_listen_socket, F_SETFL, flags | O_NONBLOCK) == -1) {
-        logger->error("failed to set listen socket non-blocking: {}", strerror(errno));
-        return 0;
+    if (chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH) == -1) {
+        logger->error("chmod on unix socket {} failed: {}", path, strerror(errno));
+        close(new_socket);
+        return 1;
     }
 
-    return new_listen_socket;
+    logger->info("listening with unix socket on {}", path);
+    listen_sockets.push_back(new_socket);
+    return 0;
 }
 
 void connection_mother::run() {
@@ -128,13 +290,19 @@ void connection_mother::handle_connect(ev::io &watcher, int events_flags) {
                 stats.peak_connections = current_open;
             }
         }
-        new connection_middleman(listen_socket, work, this);
+        new connection_middleman(watcher.fd, work, this);
     }
 }
 
 connection_mother::~connection_mother()
 {
-    close(listen_socket);
+    for (auto const &entry : listen_events) {
+        entry.second->stop();
+        delete entry.second;
+    }
+    for (const int listen_socket : listen_sockets) {
+        close(listen_socket);
+    }
 }
 
 
@@ -200,13 +368,40 @@ void connection_middleman::handle_read(ev::io &watcher, int events_flags) {
             shutdown(connect_sock, SHUT_RD);
             response = error("GET string too long", client_opts);
         } else {
-            sockaddr_in client_addr;
+            struct sockaddr_storage client_addr = {};
             socklen_t addr_len = sizeof(client_addr);
             getpeername(connect_sock, reinterpret_cast<sockaddr *>(&client_addr), &addr_len);
 
-            char ip[INET_ADDRSTRLEN] = {0};
-            inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-            client_addr_t remote_addr = {ip, AF_INET};
+            client_addr_t remote_addr = {"", AF_UNSPEC};
+            if (client_addr.ss_family == AF_INET) {
+                struct sockaddr_in *s = reinterpret_cast<struct sockaddr_in *>(&client_addr);
+                char ip[INET_ADDRSTRLEN] = {0};
+                inet_ntop(AF_INET, &s->sin_addr, ip, sizeof(ip));
+                remote_addr = {ip, AF_INET};
+            } else if (client_addr.ss_family == AF_INET6) {
+                struct sockaddr_in6 *s6 = reinterpret_cast<struct sockaddr_in6 *>(&client_addr);
+                char ip[INET6_ADDRSTRLEN] = {0};
+                inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof(ip));
+                std::string ip_str(ip);
+                // An IPv4-mapped address is IPv4, and ipv6_is_public() would
+                // reject it as such: demote it before the worker sees it.
+                if (ip_str.compare(0, 7, "::ffff:") == 0) {
+                    remote_addr = {ip_str.substr(7), AF_INET};
+                } else {
+                    remote_addr = {ip_str, AF_INET6};
+                }
+            } else if (client_addr.ss_family == AF_UNIX) {
+                // A unix socket has no address of its own; the worker requires
+                // X-Forwarded-For in that case.
+                remote_addr = {"", AF_UNIX};
+            } else {
+                shutdown(connect_sock, SHUT_RD);
+                response = error("Unknown domain socket", client_opts);
+                request.clear();
+                write_event.set<connection_middleman, &connection_middleman::handle_write>(this);
+                write_event.start(connect_sock, ev::WRITE);
+                return;
+            }
 
             //--- CALL WORKER
             response = work->work(request, remote_addr, client_opts);

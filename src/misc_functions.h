@@ -5,11 +5,15 @@
 
 #include <netinet/in.h>
 #include <string>
+#include <vector>
 
 int32_t strtoint32(const std::string& str);
 int64_t strtoint64(const std::string& str);
 std::string hex_decode(const std::string &in);
 std::string bintohex(const std::string &in);
+
+// Splits on a single delimiter; empty pieces are kept.
+std::vector<std::string> split(const std::string &s, char delim);
 
 // True when the address is globally routable, i.e. not loopback, private,
 // link-local, multicast, reserved or documentation (see the ranges below).
