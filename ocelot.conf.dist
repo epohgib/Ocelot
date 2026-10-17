@@ -12,6 +12,10 @@ keepalive_timeout   = 0
 daemonize           = false
 ignore_xff          = false
 
+# Accept announces from IPv6 peers (BEP 07). Disabled by default; only
+# users with track_ipv6 enabled on the site are recorded over IPv6
+enable_ipv6         = false
+
 announce_interval   = 1800
 announce_jitter     = 240
 max_request_size    = 4096

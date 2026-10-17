@@ -66,6 +66,7 @@ void config::init() {
     add("ignore_xff", false);
 
     // Tracker requests
+    add("enable_ipv6", false);
     add("announce_interval", 1800u);
     add("announce_jitter", 240u);
     add("max_request_size", 4096u);
