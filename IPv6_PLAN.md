@@ -338,8 +338,8 @@ populated `ipv6` until stage 2 drops the legacy columns.
 
 ### 4.5 Per-user opt-in: `track_ipv6`
 
-`users_main.track_ipv6 TINYINT(1) NOT NULL DEFAULT 0`. Default 0:
-existing users are not tracked on IPv6 until they opt in.
+`users_main.track_ipv6 TINYINT(1) NOT NULL DEFAULT 0`. Default 0: a
+member is not tracked on IPv6 until they opt in.
 
 - `load_users` (`db.cpp:171-173`) selects the new column and stores it on
   the `user` object; `user` gains a `track_ipv6` field with
@@ -383,9 +383,13 @@ clearing; if no address survives, reject — with the dedicated opt-in
 error if the IPv6 family was the only *valid public* address (dropped
 solely by opt-in), with `Invalid IP detected` otherwise.
 
-**Decision (default timing):** explicit opt-in for **both** existing and
-new users (site default 0). Conservative and GDPR-friendly; flipping the
-site default later is a one-line change with no tracker impact.
+**Decision (default timing):** explicit opt-in, site default 0. New
+members opt in by hand. At rollout the site switches the flag on for the
+members it has already seen over IPv6 (D23): their client preferred
+IPv6, and with `enable_ipv6` on the tracker would otherwise refuse their
+announce altogether. The settings page and the announcement say so and
+how to turn it off. Flipping the site default itself remains a one-line
+change with no tracker impact.
 
 This matches Luminance exactly: a profile checkbox ("Allow the tracker
 to broadcast your IPv6 address to the swarm") writes
@@ -1267,7 +1271,7 @@ must not be split, or the seeders/leechers counts inflate again.
 | D2 | Binary addresses: add `ipv4 varbinary(4)`, `ipv6 varbinary(16)`, `port`; legacy `ip` kept in stage 1 | §4.4, §6.3 |
 | D3 | No index on `ipv4`/`ipv6` (the site looks up via its own `ips` table) | §4.4 |
 | D4 | One peer holds both families; no family discriminator in the key | §4.2, §9.4 |
-| D5 | `track_ipv6` explicit opt-in, default 0, existing and new users | §4.5 |
+| D5 | `track_ipv6` explicit opt-in, default 0, new users | §4.5 |
 | D6 | Add `ip=VALUES(ip),ipv4=VALUES(ipv4),ipv6=VALUES(ipv6),port=VALUES(port)` to `ON DUPLICATE KEY UPDATE` | §4.4 |
 | D7 | `enable_ipv6` gates the worker, not the listener | §4.6 |
 | D8 | `ipv6=`/`ipv4=`/`ip=` may fill only the non-connection family | §5 Commit 3 |
@@ -1285,6 +1289,7 @@ must not be split, or the seeders/leechers counts inflate again.
 | D20 | Deduplicate `xbt_snatched`, add `PRIMARY KEY (uid, fid)`, flush via `ON DUPLICATE KEY UPDATE` (aligns with Luminance; destructive, back up first) | §4.4, §6.2, §9.2 |
 | D21 | Validation order: parse → validate → emptiness check (against post-clearing addresses) → opt-in clearing; a v6-only client without `track_ipv6` gets a dedicated opt-in error, never `Invalid IP detected`, never an address-less peer | §4.5, §5 Commit 5 |
 | D22 | Binary columns `NOT NULL DEFAULT ''`, absent = empty string (not NULL, Luminance model); legacy `ip`/`IP` receives the IPv4 dotted form when present, `''` when not | §4.4, §5 Commit 5, §6 |
+| D23 | At rollout, switch `track_ipv6` on for members already seen over IPv6, with a settings-page notice and an announcement, so `enable_ipv6` does not lock them out | §4.5, §7.3 |
 
 ### Pending deployment decisions
 
@@ -1296,7 +1301,7 @@ alone; neither needs staff or forum approval.
 | P1 | Real-client-IP header | add a configurable `real_ip_header` (default `X-Forwarded-For`, production `CF-Connecting-IP`) vs keep the hardcoded XFF | make it configurable and set `CF-Connecting-IP`; XFF's first token is spoofable behind Cloudflare |
 | P2 | Dual-stack listener (Commit 7) | build now vs defer | build now: it is independent of Cloudflare and future-proofs direct IPv6, sockets and explicit binds |
 
-**No other decisions remain open.** D1–D22 are settled, the N1–N4 site
+**No other decisions remain open.** D1–D23 are settled, the N1–N4 site
 work (§7) is a scheduled follow-up in the Gazelle repository, and P1/P2
 are the owner's to call.
 
