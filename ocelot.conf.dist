@@ -5,6 +5,8 @@
 listen_port         = 34000
 # Interfaces to listen on: '*' (all interfaces, both families), a
 # space-separated list of addresses (e.g. "0.0.0.0 ::") or unix:/path.sock
+# '*' and any IPv6 entry are only safe when the port is reachable from the
+# proxy alone: the real-client-IP header below is forgeable otherwise.
 listen_host         = *
 max_connections     = 128
 max_middlemen       = 20000
@@ -16,7 +18,8 @@ daemonize           = false
 ignore_xff          = false
 # Header carrying the real client IP when behind a proxy. Behind Cloudflare
 # set this to CF-Connecting-IP: Cloudflare appends the connecting IP to a
-# client-supplied X-Forwarded-For, so its first token is spoofable.
+# client-supplied X-Forwarded-For, so its first token is spoofable. Whatever
+# header is trusted, the origin must accept the port only from the proxy.
 # An empty value disables reading the header entirely.
 real_ip_header      = X-Forwarded-For
 

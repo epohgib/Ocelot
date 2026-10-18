@@ -165,6 +165,17 @@ Consequences:
 - The announce endpoint must be reached on a Cloudflare-proxied port
   (80/443/…), not a DNS-only custom port; otherwise IPv6 clients connect
   straight to the IPv4-only origin and fail.
+- **The origin must accept the tracker port only from Cloudflare.**
+  `CF-Connecting-IP` is a plain header: anyone who can reach the origin
+  directly can forge it, exactly as they can forge the first token of
+  `X-Forwarded-For`. A firewall rule (or a `listen_host`/bind address)
+  that makes the port unreachable except from Cloudflare's ranges is part
+  of the deployment, not optional hardening. The nginx `set_real_ip_from`
+  lines only tell nginx whose `X-Forwarded-For` to believe; they do not
+  stop a direct connection.
+- Verify from a host outside Cloudflare that
+  `curl -H 'CF-Connecting-IP: 1.2.3.4'` against the origin is refused, or
+  that the tracker ignores the header. Repeat the check on the twin.
 - The address string handed to the worker carries its family explicitly
   (§4.8), so `worker::work` does not have to guess.
 
@@ -1116,10 +1127,13 @@ drops `ip`, but not before the flag is enabled.
 Prerequisite outside both repositories: the announce endpoint must be
 behind Cloudflare on a proxied port, with `CF-Connecting-IP` forwarded to
 the origin, and the tracker's `ignore_xff` must be `false` (§4.1.1). The
-origin itself does **not** need IPv6: Cloudflare terminates IPv6 and
-forwards over IPv4, carrying the client's IPv6 in the header. If the
-tracker were ever exposed on a DNS-only port, IPv6 clients would reach
-the IPv4-only origin directly and fail.
+origin must also accept the tracker port only from Cloudflare's ranges — a
+firewall rule or a restricted `listen_host` — because that header, like
+`X-Forwarded-For`'s first token, is forgeable by anyone who reaches the
+origin directly. The origin itself does **not** need IPv6: Cloudflare
+terminates IPv6 and forwards over IPv4, carrying the client's IPv6 in the
+header. If the tracker were ever exposed on a DNS-only port, IPv6 clients
+would reach the IPv4-only origin directly and fail.
 
 ---
 
