@@ -842,8 +842,9 @@ column.
 | 4 | — | S3–S4, S6 | site fully on binary |
 | 5 | stage 2: stop writing `ip`, then drop it | — | every site query on binary |
 
-Steps 1–2 are purely additive and reversible. Step 5 is the only
-destructive one and happens last.
+Step 1 is additive. Step 2 also changes `xbt_snatched` irreversibly: it
+deletes the duplicate snatch rows (D20). Step 5 is the other destructive
+step and happens last.
 
 ---
 
@@ -970,7 +971,8 @@ SET @done = (SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND INDEX_NAME = 'PRIMARY' AND COLUMN_NAME = 'fid');
 
--- 1. temporary auto-increment PK: deterministic "keep the newest" rule
+-- 1. temporary auto-increment PK: the table has no primary key today, so this is
+--    the only stable identity a row has while the survivors are chosen.
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'snatch_id');
@@ -984,14 +986,18 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'snatch_id');
 
--- 2. keep only the newest row per (uid, fid), so no ties can survive.
+-- 2. keep only the row with the latest tstamp per (uid, fid); snatch_id
+--    (the physical insertion order) only breaks a tstamp tie. tstamp is the
+--    announce time and the column the site orders its history by, while
+--    snatch_id follows the heap order of an INSERT IGNORE table that never
+--    had a primary key.
 --    Multi-table DELETE has no LIMIT, and a labeled REPEAT loop is only
 --    valid inside a stored program, so this is a single set-based
---    statement: the survivor per key is computed once and every older
+--    statement: the survivor per key is computed once and every other
 --    duplicate goes in the same pass. On a very large snatch table this is
 --    the heaviest statement of the migration (see the Impact note below).
 SET @s = IF(@done = 0 AND @c = 1,
-  'CREATE TEMPORARY TABLE xbt_snatched_keep AS SELECT uid, fid, MAX(snatch_id) AS keep FROM xbt_snatched GROUP BY uid, fid',
+  'CREATE TEMPORARY TABLE xbt_snatched_keep AS SELECT k.uid, k.fid, MAX(k.snatch_id) AS keep FROM xbt_snatched k JOIN (SELECT uid, fid, MAX(tstamp) AS latest FROM xbt_snatched GROUP BY uid, fid) t ON t.uid = k.uid AND t.fid = k.fid AND t.latest = k.tstamp GROUP BY k.uid, k.fid',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 SET @s = IF(@done = 0 AND @c = 1,
@@ -1015,7 +1021,7 @@ Impact: the three `xbt_files_users` `ALTER`s are fast on MySQL 8
 (INPLACE); `users_main` is instant. **`xbt_snatched` is not instant:**
 steps 1 and 3 are full table rebuilds (add/swap of the auto-increment
 primary key) and step 2 scans the whole table to compute the survivors
-and delete the older duplicates — on a large snatch table this is the
+and delete every other duplicate — on a large snatch table this is the
 heaviest part of the migration. Run it in a maintenance window with the
 tracker's snatch flush paused, so that no `(uid, fid)` duplicate lands
 after the survivor table has been computed.
@@ -1137,7 +1143,7 @@ documentation prefix and is rejected by `ipv6_is_public` by design.
 ```bash
 # Test 1: IPv4 must keep working
 curl -4 "http://127.0.0.1:31000/announce?info_hash=%aa%bb%cc%dd&peer_id=-OC0001-123456789012&port=6881&uploaded=0&downloaded=0&left=0&compact=1&event=started" \
-  -H "X-Forwarded-For: 8.8.8.8"             # documentation/reserved IPs are now rejected (§4.3)
+  -H "X-Forwarded-For: 8.8.8.8"             # public address, accepted (§4.3)
 # Expected: success
 
 # Test 2: IPv6 in XFF, enable_ipv6=true

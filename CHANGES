@@ -34,7 +34,7 @@ FEATURES
 * stats endpoints report ipv4 peers and ipv6 peers.
 BREAKING
 * Announce addresses are now validated: private, loopback, link-local, multicast, reserved and documentation ranges are rejected for both families. A tracker that only ever sees private addresses (no proxy, LAN clients) will reject those announces.
-* xbt_snatched gains PRIMARY KEY (uid, fid) and its duplicate rows are removed, keeping the newest insertion per pair. Back up the table before migrating.
+* xbt_snatched gains PRIMARY KEY (uid, fid) and its duplicate rows are removed, keeping the latest announce (tstamp, with snatch_id only breaking a tie) per pair. Back up the table before migrating.
 BUGFIXES
 * reap_peers() counted every scanned peer in stats.leechers/seeders, including the ones it had just reaped; the counters are now recomputed from the surviving swarms.
 * xbt_snatched no longer accumulates a row per re-snatch, and a peer changing address updates ip/ipv4/ipv6/port on duplicate.

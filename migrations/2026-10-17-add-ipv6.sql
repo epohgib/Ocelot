@@ -86,7 +86,8 @@ SET @done = (SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND INDEX_NAME = 'PRIMARY' AND COLUMN_NAME = 'fid');
 
--- 1. temporary auto-increment PK: deterministic "keep the newest" rule
+-- 1. temporary auto-increment PK: the table has no primary key today, so this is
+--    the only stable identity a row has while the survivors are chosen.
 SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'snatch_id');
@@ -100,18 +101,22 @@ SET @c = (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'xbt_snatched'
     AND COLUMN_NAME = 'snatch_id');
 
--- 2. keep only the newest row per (uid, fid), so no ties can survive.
+-- 2. keep only the row with the latest tstamp per (uid, fid); snatch_id
+--    (the physical insertion order) only breaks a tstamp tie. tstamp is the
+--    announce time and the column the site orders its history by, while
+--    snatch_id follows the heap order of an INSERT IGNORE table that never
+--    had a primary key.
 --    Multi-table DELETE has no LIMIT, and a labeled REPEAT loop is only
 --    valid inside a stored program, so this is a single set-based
---    statement: the survivor per key is computed once and every older
+--    statement: the survivor per key is computed once and every other
 --    duplicate goes in the same pass. On a very large snatch table this is
 --    the heaviest statement of the migration (see the plan's Impact note).
 SET @s = IF(@done = 0 AND @c = 1,
-  'CREATE TEMPORARY TABLE xbt_snatched_keep AS SELECT uid, fid, MAX(snatch_id) AS keep FROM xbt_snatched GROUP BY uid, fid',
+  'CREATE TEMPORARY TABLE xbt_snatched_keep AS SELECT k.uid, k.fid, MAX(k.snatch_id) AS keep FROM xbt_snatched k JOIN (SELECT uid, fid, MAX(tstamp) AS latest FROM xbt_snatched GROUP BY uid, fid) t ON t.uid = k.uid AND t.fid = k.fid AND t.latest = k.tstamp GROUP BY k.uid, k.fid',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 SET @s = IF(@done = 0 AND @c = 1,
-  'DELETE s FROM xbt_snatched s JOIN xbt_snatched_keep k ON k.uid = s.uid AND k.fid = s.fid WHERE s.snatch_id < k.keep',
+  'DELETE s FROM xbt_snatched s JOIN xbt_snatched_keep k ON k.uid = s.uid AND k.fid = s.fid WHERE s.snatch_id <> k.keep',
   'SELECT 1');
 PREPARE st FROM @s; EXECUTE st; DEALLOCATE PREPARE st;
 DROP TEMPORARY TABLE IF EXISTS xbt_snatched_keep;
